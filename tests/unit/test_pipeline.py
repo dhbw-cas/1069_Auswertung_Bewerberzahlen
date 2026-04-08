@@ -106,8 +106,9 @@ def test_mehrfach_status_fuehrt_zu_fehler() -> None:
     )
     result = process_dataframe(data, _resolver())
 
-    assert result.cleaned is None
-    assert result.errors
+    assert result.cleaned is not None
+    assert not result.errors
+    assert result.cleaned[STATUS_COLUMN].iloc[0] == "Absage"
 
 
 def test_unknown_program_ergibt_fehler() -> None:
@@ -116,6 +117,23 @@ def test_unknown_program_ergibt_fehler() -> None:
 
     assert result.cleaned is None
     assert any("Unbekannt" in issue.message for issue in result.errors)
+
+
+def test_leerer_studiengang_wird_ignoriert_aber_gemeldet() -> None:
+    data = _df(
+        [
+            _base_row(Bewerbungsnummer=1, **{PROGRAM_COLUMN: ""}),
+            _base_row(
+                Bewerbungsnummer=2, **{PROGRAM_COLUMN: "Informatik", EMAIL_COLUMN: "b@example.com"}
+            ),
+        ]
+    )
+    result = process_dataframe(data, _resolver())
+
+    assert result.cleaned is not None
+    assert len(result.cleaned) == 1
+    assert result.cleaned[PROGRAM_COLUMN].iloc[0] == "Informatik"
+    assert any("Studiengang fehlt" in issue.message for issue in result.warnings)
 
 
 def test_manuelle_zuordnung_erlaubt_unbekannten_studiengang() -> None:

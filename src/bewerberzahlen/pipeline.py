@@ -63,15 +63,18 @@ def process_dataframe(
             )
         )
 
-    status_errors = _apply_status_rules(working)
-    if status_errors:
-        errors.append(
+    missing_programs, working = _separate_missing_programs(working)
+    if not missing_programs.empty:
+        warnings.append(
             Issue(
-                message="Status-Spalten (D/F/G) sind mehrfach gefüllt; bitte bereinigen.",
-                level="error",
-                rows=status_errors,
+                message="Studiengang fehlt; Zeile wurde ignoriert.",
+                level="warning",
+                rows=missing_programs["__row_number"].astype(int).tolist(),
+                context={"anzahl": len(missing_programs)},
             )
         )
+
+    _apply_status_rules(working)
 
     mapping_errors = _apply_fachbereich_mapping(working, resolver, cfg.manual_assignments)
     if mapping_errors:
@@ -103,6 +106,8 @@ def _normalize_columns(df: pd.DataFrame) -> None:
     df[EMAIL_COLUMN] = df[EMAIL_COLUMN].astype(str).str.strip().str.lower()
     df[PROGRAM_COLUMN] = df[PROGRAM_COLUMN].astype(str).str.strip()
     df[STATUS_COLUMN] = df[STATUS_COLUMN].fillna("").astype(str)
+    # Stelle sicher, dass Fachbereich beschreibbar ist (kein float64-Spaltentyp aus Excel)
+    df[FACHBEREICH_COLUMN] = df[FACHBEREICH_COLUMN].astype("string")
 
 
 def _deduplicate(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -114,6 +119,13 @@ def _deduplicate(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return duplicates, deduped
 
 
+def _separate_missing_programs(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    mask_missing = ~df[PROGRAM_COLUMN].apply(_has_value)
+    missing = df.loc[mask_missing].copy()
+    present = df.loc[~mask_missing].copy()
+    return missing, present
+
+
 def _has_value(value: object) -> bool:
     value_any: Any = value
     if pd.isna(value_any):
@@ -123,24 +135,23 @@ def _has_value(value: object) -> bool:
     return True
 
 
-def _apply_status_rules(df: pd.DataFrame) -> list[int]:
-    error_rows: list[int] = []
-    for idx, row in df.iterrows():
-        row_number = int(row["__row_number"])
-        filled = []
-        if _has_value(row[ACCEPTED_COLUMN]):
-            filled.append(DERIVED_STATUS_VALUES[ACCEPTED_COLUMN])
-        if _has_value(row[REJECTION_COLUMN]):
-            filled.append(DERIVED_STATUS_VALUES[REJECTION_COLUMN])
-        if _has_value(row[NO_POTENTIAL_COLUMN]) and str(row[NO_POTENTIAL_COLUMN]).strip() != "0":
-            filled.append(DERIVED_STATUS_VALUES[NO_POTENTIAL_COLUMN])
+def _apply_status_rules(df: pd.DataFrame) -> None:
+    priority = [
+        (REJECTION_COLUMN, DERIVED_STATUS_VALUES[REJECTION_COLUMN]),
+        (ACCEPTED_COLUMN, DERIVED_STATUS_VALUES[ACCEPTED_COLUMN]),
+        (NO_POTENTIAL_COLUMN, DERIVED_STATUS_VALUES[NO_POTENTIAL_COLUMN]),
+    ]
 
-        if len(filled) > 1:
-            error_rows.append(row_number)
-            continue
-        if len(filled) == 1:
-            df.at[idx, STATUS_COLUMN] = filled[0]
-    return error_rows
+    for idx, row in df.iterrows():
+        chosen: str | None = None
+        for col, status_value in priority:
+            if _has_value(row[col]) and not (
+                col == NO_POTENTIAL_COLUMN and str(row[col]).strip() == "0"
+            ):
+                chosen = status_value
+                break
+        if chosen:
+            df.at[idx, STATUS_COLUMN] = chosen
 
 
 def _apply_fachbereich_mapping(
