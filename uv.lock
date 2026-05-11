@@ -13,7 +13,7 @@ resolution-markers = [
 [[package]]
 name = "1069-auswertung-bewerberzahlen"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "openpyxl" },
     { name = "pandas" },
