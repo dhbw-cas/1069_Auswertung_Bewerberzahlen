@@ -13,7 +13,7 @@ from bewerberzahlen import (
     ProgramResolver,
     dataframe_to_excel_bytes,
     process_dataframe,
-    read_excel_from_bytes,
+    read_import_csv_from_bytes,
 )
 from bewerberzahlen.constants import PROGRAM_COLUMN, STATUS_COLUMN
 
@@ -22,7 +22,7 @@ MAPPING_PATH = Path(__file__).resolve().parent / "data" / "mapping" / "studienga
 st.set_page_config(page_title="Bewerberzahlen bereinigen", layout="wide")
 st.title("Bewerberzahlen bereinigen")
 st.markdown(
-    "Bereinigt Bewerber-Excel-Dateien: Dubletten filtern, Status ableiten, Fachbereiche "
+    "Bereinigt Bewerber-CSV-Dateien: Dubletten filtern, Status ableiten, Fachbereiche "
     "zuordnen und personenbezogene Spalten entfernen."
 )
 
@@ -67,12 +67,12 @@ def _format_duplicate_option(row_number: int, df_with_rows: pd.DataFrame) -> str
 st.info("Maximale Upload-Größe: 20 MB", icon="ℹ️")
 
 with st.form("bereinigung_form"):
-    uploader = st.file_uploader("Excel-Datei hochladen", type=["xlsx"], accept_multiple_files=False)
+    uploader = st.file_uploader("CSV-Datei hochladen", type=["csv"], accept_multiple_files=False)
     submit = st.form_submit_button("Bereinigen", type="primary")
 
 if submit:
     if not uploader:
-        st.error("Bitte eine Excel-Datei auswählen.")
+        st.error("Bitte eine CSV-Datei auswählen.")
     elif uploader.size and uploader.size > 20 * 1024 * 1024:
         st.error("Datei ist größer als 20 MB und wird nicht verarbeitet.")
     else:
@@ -91,7 +91,7 @@ uploaded_name = st.session_state.get("uploaded_file_name")
 
 if isinstance(uploaded_bytes, (bytes, bytearray)) and isinstance(uploaded_name, str):
     try:
-        df = read_excel_from_bytes(bytes(uploaded_bytes))
+        df = read_import_csv_from_bytes(bytes(uploaded_bytes))
     except Exception as exc:  # noqa: BLE001
         st.error(f"Konnte Datei nicht lesen: {exc}")
     else:

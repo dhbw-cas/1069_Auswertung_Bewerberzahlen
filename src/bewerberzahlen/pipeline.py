@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import pandas as pd
 
@@ -176,12 +176,12 @@ def _resolve_duplicates_by_selection(
     row_numbers = pd.Series(df["__row_number"], index=df.index, dtype="int64")
     if unresolved_groups:
         mask = row_numbers.isin(duplicate_rows)
-        duplicates = cast(pd.DataFrame, df.loc[mask, :]).copy()
+        duplicates = df.loc[mask, :].copy()
         return duplicates, df, unresolved_groups
 
     remove_mask = row_numbers.isin(rows_to_remove)
-    duplicates = cast(pd.DataFrame, df.loc[remove_mask, :]).copy()
-    deduped = cast(pd.DataFrame, df.loc[~remove_mask, :]).copy()
+    duplicates = df.loc[remove_mask, :].copy()
+    deduped = df.loc[~remove_mask, :].copy()
     return duplicates, deduped, []
 
 
@@ -192,8 +192,8 @@ def _count_duplicate_excess(duplicate_groups: dict[tuple[str, str], list[int]]) 
 def _separate_missing_programs(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     program_values = pd.Series(df[PROGRAM_COLUMN], index=df.index)
     mask_missing = ~program_values.apply(_has_value).astype(bool)
-    missing = cast(pd.DataFrame, df.loc[mask_missing, :]).copy()
-    present = cast(pd.DataFrame, df.loc[~mask_missing, :]).copy()
+    missing = df.loc[mask_missing, :].copy()
+    present = df.loc[~mask_missing, :].copy()
     return missing, present
 
 
