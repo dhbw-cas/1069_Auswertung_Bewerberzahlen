@@ -16,11 +16,14 @@ from bewerberzahlen.constants import (
     STATUS_COLUMN,
 )
 from bewerberzahlen.storage import (
+    DashboardFilters,
     compute_content_hash,
     delete_import_batch,
     extract_snapshot_date,
+    get_dashboard_filter_options,
     is_delete_password_valid,
     list_import_batches,
+    load_dashboard_rows,
     normalize_imported_by,
 )
 
@@ -33,6 +36,9 @@ class _Cursor:
     def fetchall(self) -> list[tuple[object, ...]]:
         return self._rows
 
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self._rows[0] if self._rows else None
+
 
 class _Transaction:
     def __enter__(self) -> None:
@@ -43,13 +49,30 @@ class _Transaction:
 
 
 class _FakeConnection:
-    def __init__(self, rows: list[tuple[object, ...]] | None = None, delete_rowcount: int = 0):
+    def __init__(
+        self,
+        rows: list[tuple[object, ...]] | None = None,
+        delete_rowcount: int = 0,
+        dashboard_rows: list[tuple[object, ...]] | None = None,
+        date_bounds: tuple[date | None, date | None] = (None, None),
+        distinct_values: dict[str, list[str]] | None = None,
+    ):
         self.rows = rows or []
         self.delete_rowcount = delete_rowcount
+        self.dashboard_rows = dashboard_rows or []
+        self.date_bounds = date_bounds
+        self.distinct_values = distinct_values or {}
         self.executed: list[tuple[str, tuple[object, ...]]] = []
 
     def execute(self, query: str, params: tuple[object, ...] = ()) -> _Cursor:
         self.executed.append((query, params))
+        if "MIN(snapshot_date)" in query:
+            return _Cursor(rows=[self.date_bounds])
+        for column in ("fachbereich", "studiengang", "status"):
+            if f"SELECT DISTINCT {column}" in query:
+                return _Cursor(rows=[(value,) for value in self.distinct_values.get(column, [])])
+        if "COUNT(*) AS anzahl" in query:
+            return _Cursor(rows=self.dashboard_rows)
         if "SELECT id, filename" in query:
             return _Cursor(rows=self.rows)
         if "DELETE FROM import_batches" in query:
@@ -166,3 +189,74 @@ def test_is_delete_password_valid_vergleicht_passwort() -> None:
     assert is_delete_password_valid("geheim", "geheim") is True
     assert is_delete_password_valid("falsch", "geheim") is False
     assert is_delete_password_valid("geheim", None) is False
+
+
+def test_get_dashboard_filter_options_mappt_db_rows() -> None:
+    conn = cast(
+        Any,
+        _FakeConnection(
+            date_bounds=(date(2026, 5, 11), date(2026, 6, 8)),
+            distinct_values={
+                "fachbereich": ["Gesundheit", "Technik"],
+                "studiengang": ["Informatik", "Maschinenbau"],
+                "status": ["Absage", "Akzeptiert"],
+            },
+        ),
+    )
+
+    options = get_dashboard_filter_options(conn)
+
+    assert options.min_snapshot_date == date(2026, 5, 11)
+    assert options.max_snapshot_date == date(2026, 6, 8)
+    assert options.fachbereiche == ["Gesundheit", "Technik"]
+    assert options.studiengaenge == ["Informatik", "Maschinenbau"]
+    assert options.statuses == ["Absage", "Akzeptiert"]
+
+
+def test_load_dashboard_rows_mappt_aggregierte_db_rows() -> None:
+    fake_conn = _FakeConnection(
+        dashboard_rows=[
+            (date(2026, 5, 11), "Technik", "Informatik", "Akzeptiert", 5),
+            (date(2026, 5, 11), "Wirtschaft", "Marketing", "Absage", 3),
+        ]
+    )
+    conn = cast(Any, fake_conn)
+    filters = DashboardFilters(
+        start_date=date(2026, 5, 1),
+        end_date=date(2026, 5, 31),
+        fachbereiche=("Technik",),
+        studiengaenge=("Informatik",),
+        statuses=("Akzeptiert",),
+    )
+
+    rows = load_dashboard_rows(conn, filters)
+
+    assert rows.to_dict("records") == [
+        {
+            "snapshot_date": date(2026, 5, 11),
+            "fachbereich": "Technik",
+            "studiengang": "Informatik",
+            "status": "Akzeptiert",
+            "anzahl": 5,
+        },
+        {
+            "snapshot_date": date(2026, 5, 11),
+            "fachbereich": "Wirtschaft",
+            "studiengang": "Marketing",
+            "status": "Absage",
+            "anzahl": 3,
+        },
+    ]
+    executed_dashboard_query = [
+        query for query, _ in fake_conn.executed if "COUNT(*) AS anzahl" in query
+    ]
+    assert executed_dashboard_query
+    assert "b.snapshot_date >= %s" in executed_dashboard_query[0]
+    assert "a.fachbereich IN (%s)" in executed_dashboard_query[0]
+    assert fake_conn.executed[-1][1] == (
+        date(2026, 5, 1),
+        date(2026, 5, 31),
+        "Technik",
+        "Informatik",
+        "Akzeptiert",
+    )

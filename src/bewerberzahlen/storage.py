@@ -34,6 +34,24 @@ class ExistingImport:
     row_count: int
 
 
+@dataclass(frozen=True)
+class DashboardFilters:
+    start_date: date | None = None
+    end_date: date | None = None
+    fachbereiche: tuple[str, ...] = ()
+    studiengaenge: tuple[str, ...] = ()
+    statuses: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DashboardFilterOptions:
+    min_snapshot_date: date | None
+    max_snapshot_date: date | None
+    fachbereiche: list[str]
+    studiengaenge: list[str]
+    statuses: list[str]
+
+
 class DuplicateImportError(ValueError):
     def __init__(self, existing: ExistingImport):
         self.existing = existing
@@ -229,6 +247,60 @@ def delete_import_batch(conn: Connection[Any], batch_id: int) -> bool:
     return cursor.rowcount == 1
 
 
+def get_dashboard_filter_options(conn: Connection[Any]) -> DashboardFilterOptions:
+    ensure_schema(conn)
+    date_row = conn.execute(
+        "SELECT MIN(snapshot_date), MAX(snapshot_date) FROM import_batches"
+    ).fetchone()
+    fachbereiche = _fetch_distinct_values(conn, "fachbereich")
+    studiengaenge = _fetch_distinct_values(conn, "studiengang")
+    statuses = _fetch_distinct_values(conn, "status")
+    return DashboardFilterOptions(
+        min_snapshot_date=date_row[0] if date_row else None,
+        max_snapshot_date=date_row[1] if date_row else None,
+        fachbereiche=fachbereiche,
+        studiengaenge=studiengaenge,
+        statuses=statuses,
+    )
+
+
+def load_dashboard_rows(
+    conn: Connection[Any], filters: DashboardFilters | None = None
+) -> pd.DataFrame:
+    ensure_schema(conn)
+    where_sql, params = _build_dashboard_where(filters or DashboardFilters())
+    rows = conn.execute(
+        f"""
+        SELECT
+            b.snapshot_date,
+            a.fachbereich,
+            a.studiengang,
+            a.status,
+            COUNT(*) AS anzahl
+        FROM applications a
+        JOIN import_batches b ON b.id = a.batch_id
+        {where_sql}
+        GROUP BY b.snapshot_date, a.fachbereich, a.studiengang, a.status
+        ORDER BY b.snapshot_date, a.fachbereich, a.studiengang, a.status
+        """,
+        tuple(params),
+    ).fetchall()
+    records = [
+        {
+            "snapshot_date": row[0],
+            "fachbereich": str(row[1]),
+            "studiengang": str(row[2]),
+            "status": str(row[3]),
+            "anzahl": int(row[4]),
+        }
+        for row in rows
+    ]
+    return pd.DataFrame(
+        records,
+        columns=["snapshot_date", "fachbereich", "studiengang", "status", "anzahl"],
+    )
+
+
 def find_import_by_hash(conn: Connection[Any], content_hash: str) -> ExistingImport | None:
     row = conn.execute(
         """
@@ -247,6 +319,51 @@ def is_delete_password_valid(entered_password: str, expected_password: str | Non
     if expected_password is None or not expected_password:
         return False
     return hmac.compare_digest(entered_password, expected_password)
+
+
+def _fetch_distinct_values(conn: Connection[Any], column: str) -> list[str]:
+    if column not in {"fachbereich", "studiengang", "status"}:
+        raise ValueError(f"Ungültige Filterspalte: {column}")
+    rows = conn.execute(
+        f"""
+        SELECT DISTINCT {column}
+        FROM applications
+        WHERE {column} IS NOT NULL AND length(trim({column})) > 0
+        ORDER BY {column}
+        """
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def _build_dashboard_where(filters: DashboardFilters) -> tuple[str, list[object]]:
+    clauses: list[str] = []
+    params: list[object] = []
+
+    if filters.start_date is not None:
+        clauses.append("b.snapshot_date >= %s")
+        params.append(filters.start_date)
+    if filters.end_date is not None:
+        clauses.append("b.snapshot_date <= %s")
+        params.append(filters.end_date)
+
+    _add_in_filter(clauses, params, "a.fachbereich", filters.fachbereiche)
+    _add_in_filter(clauses, params, "a.studiengang", filters.studiengaenge)
+    _add_in_filter(clauses, params, "a.status", filters.statuses)
+
+    if not clauses:
+        return "", params
+    return "WHERE " + " AND ".join(clauses), params
+
+
+def _add_in_filter(
+    clauses: list[str], params: list[object], column: str, values: tuple[str, ...]
+) -> None:
+    normalized_values = tuple(value.strip() for value in values if value.strip())
+    if not normalized_values:
+        return
+    placeholders = ", ".join(["%s"] * len(normalized_values))
+    clauses.append(f"{column} IN ({placeholders})")
+    params.extend(normalized_values)
 
 
 def _existing_import_from_row(row: Any) -> ExistingImport:
