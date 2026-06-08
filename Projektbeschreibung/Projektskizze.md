@@ -17,6 +17,49 @@ Das Projekt wird in zwei Phasen unterteilt:
 - **Frontend:** Streamlit  
 - **Datenquelle:** Excel-Dateien  
 - **Datenpfad (Entwicklung):** `data/development`
+- **Persistenz:** PostgreSQL auf Sliplane  
+- **Deployment:** Sliplane mit privaten Streamlit-Services und öffentlichen Basic-Auth-Proxys
+
+### Aktuelle Zielarchitektur
+
+Die Anwendung wird aus einer gemeinsamen Codebasis als zwei getrennte Streamlit-Services betrieben:
+
+- **Admin-App:** `src/app.py`  
+  Enthält die Seiten `Import`, `Datenstandverwaltung` und `Dashboard`.
+- **Dashboard-only-App:** `src/dashboard_app.py`  
+  Enthält ausschließlich die Dashboard-Seite für die Hochschulleitung.
+
+Beide Services verwenden denselben `Dockerfile`. Der aktive Einstiegspunkt wird über `STREAMLIT_ENTRYPOINT` gesetzt.
+
+Sliplane-Services:
+
+- **PostgreSQL:** privater TCP-Service mit persistentem Volume.
+- **Admin-Streamlit:** privater HTTP-Service mit `STREAMLIT_ENTRYPOINT=src/app.py`.
+- **Dashboard-Streamlit:** privater HTTP-Service mit `STREAMLIT_ENTRYPOINT=src/dashboard_app.py`.
+- **Admin-Basic-Auth-Proxy:** öffentlicher HTTP-Service vor der Admin-App.
+- **Dashboard-Basic-Auth-Proxy:** öffentlicher HTTP-Service vor der Dashboard-only-App, gemeinsamer Benutzer `dashboard`.
+
+Secrets und Konfiguration:
+
+- `DATABASE_URL`: Verbindung zur privaten PostgreSQL-Datenbank.
+- `IMPORT_DELETE_PASSWORD`: nur in der Admin-App gesetzt; aktiviert das Löschen gespeicherter Importe.
+- `STREAMLIT_ENTRYPOINT`: steuert, ob Admin-App oder Dashboard-only-App gestartet wird.
+
+Code-Struktur:
+
+- `src/app_pages/import_page.py`: Upload, Bereinigung, Download und Import in PostgreSQL.
+- `src/app_pages/data_management_page.py`: Import-Historie und passwortgeschütztes Löschen.
+- `src/app_pages/dashboard_page.py`: Berichte über historische Snapshots.
+- `src/bewerberzahlen/pipeline.py`: fachliche Bereinigungslogik.
+- `src/bewerberzahlen/storage.py`: PostgreSQL-Schema, Speicherung, Historie, Löschen und Dashboard-Abfragen.
+- `src/bewerberzahlen/app_config.py`: Umgebungsvariablen und Streamlit-Secrets.
+
+Datenhaltung:
+
+- Es werden nur bereinigte Daten ohne personenbezogene Felder gespeichert.
+- Jeder Import erzeugt einen Eintrag in `import_batches` und zugehörige Zeilen in `applications`.
+- Doppelte Importe werden über einen Hash des bereinigten Datenbestands verhindert.
+- Das `snapshot_date` stammt aus dem Dateinamen und ist die Zeitachse der Berichte.
 
 ---
 
@@ -81,10 +124,11 @@ Die so bereinigte und aufbereitete Datei soll als Download angeboten werden
 ## Phase 2: Historische Auswertungen
 
 In der zweiten Phase wird auf den bereinigten Daten aufgebaut:
-Diese Daten sollen dann zukünftig in eine Datenbank (vielleicht Supabase, vielleicht Airtable) abgespeichert werden unter Ergänzung eines Datumsstempels (siehe Dateiname), um einen Datenbestand aufzubauen.
+Diese Daten werden in PostgreSQL gespeichert unter Ergänzung eines Datumsstempels aus dem Dateinamen, um einen historischen Datenbestand aufzubauen.
 - Aufbau einer **persistenten Datenbasis**
 - Durchführung von **Zeitreihenanalysen**
 - Ermöglichung von **historischen Vergleichen** (z. B. Bewerberzahlen pro Zeitraum, Studiengang, Fachbereich)
+- Bereitstellung eines geschützten Dashboard-only-Zugangs für die Hochschulleitung
 
 ---
 
