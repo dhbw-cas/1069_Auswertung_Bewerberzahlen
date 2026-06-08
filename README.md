@@ -19,9 +19,11 @@ Die App liest die Datenbankverbindung aus `DATABASE_URL`.
 
 ```env
 DATABASE_URL=postgresql://bewerberzahlen_app:<passwort>@<host>:5432/bewerberzahlen
+IMPORT_DELETE_PASSWORD=<loesch-passwort>
 ```
 
 Ohne `DATABASE_URL` funktioniert die Bereinigung weiter, aber das Speichern in die Datenbank ist deaktiviert.
+Ohne `IMPORT_DELETE_PASSWORD` ist das Loeschen gespeicherter Importe deaktiviert.
 
 ## Sliplane
 
@@ -32,6 +34,7 @@ Die produktive Zielarchitektur ist:
 - Basic-Auth-Proxy als oeffentlicher HTTP-Service vor der App.
 
 Der Streamlit-Service nutzt den `Dockerfile` im Repository. In Sliplane ist daher kein Override CMD noetig.
+`DATABASE_URL` und `IMPORT_DELETE_PASSWORD` sollten in Sliplane als Secrets gesetzt werden.
 
 PostgreSQL-Einrichtung: [`docs/sliplane-postgres.md`](docs/sliplane-postgres.md)
 

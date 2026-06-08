@@ -22,8 +22,11 @@ from bewerberzahlen.storage import (
     DuplicateImportError,
     compute_content_hash,
     connection_from_url,
+    delete_import_batch,
     extract_snapshot_date,
     import_cleaned_dataframe,
+    is_delete_password_valid,
+    list_import_batches,
 )
 
 MAPPING_PATH = Path(__file__).resolve().parent / "data" / "mapping" / "studiengaenge.json"
@@ -77,17 +80,98 @@ def _format_duplicate_option(row_number: int, df_with_rows: pd.DataFrame) -> str
     )
 
 
-def _get_database_url() -> str | None:
-    database_url = os.environ.get("DATABASE_URL")
-    if database_url:
-        return database_url
+def _get_config_value(name: str) -> str | None:
+    env_value = os.environ.get(name)
+    if env_value:
+        return env_value
     try:
-        secret_value = st.secrets.get("DATABASE_URL")
+        secret_value = st.secrets.get(name)
     except (FileNotFoundError, KeyError, StreamlitSecretNotFoundError):
         return None
     if not secret_value:
         return None
     return str(secret_value)
+
+
+def _get_database_url() -> str | None:
+    return _get_config_value("DATABASE_URL")
+
+
+def _render_import_history() -> None:
+    st.header("Import-Historie")
+    database_url = _get_database_url()
+    if database_url is None:
+        st.info("Keine Datenbankverbindung konfiguriert. Import-Historie ist deaktiviert.")
+        return
+
+    try:
+        with connection_from_url(database_url) as conn:
+            imports = list_import_batches(conn)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Import-Historie konnte nicht geladen werden: {exc}")
+        return
+
+    if not imports:
+        st.info("Noch keine gespeicherten Importe vorhanden.")
+        return
+
+    import_rows = [
+        {
+            "ID": batch.id,
+            "Snapshot-Datum": batch.snapshot_date.strftime("%d.%m.%Y"),
+            "Datei": batch.filename,
+            "Importiert von": batch.imported_by,
+            "Importiert am": batch.created_at.strftime("%d.%m.%Y %H:%M"),
+            "Zeilen": batch.row_count,
+        }
+        for batch in imports
+    ]
+    st.dataframe(pd.DataFrame(import_rows), hide_index=True, use_container_width=True)
+
+    delete_password = _get_config_value("IMPORT_DELETE_PASSWORD")
+    if delete_password is None:
+        st.warning(
+            "Löschen ist deaktiviert. Bitte IMPORT_DELETE_PASSWORD als Secret setzen, "
+            "wenn Importe löschbar sein sollen."
+        )
+        return
+
+    with st.expander("Import löschen"):
+        labels_by_id = {
+            batch.id: (
+                f"#{batch.id} | {batch.snapshot_date:%d.%m.%Y} | "
+                f"{batch.filename} | {batch.row_count} Zeilen"
+            )
+            for batch in imports
+        }
+        with st.form("delete_import_form"):
+            selected_id = st.selectbox(
+                "Zu löschender Import",
+                options=list(labels_by_id.keys()),
+                format_func=lambda batch_id: labels_by_id[int(batch_id)],
+            )
+            entered_password = st.text_input("Lösch-Passwort", type="password")
+            confirmed = st.checkbox("Ich möchte diesen Import dauerhaft löschen.")
+            submit_delete = st.form_submit_button("Import löschen")
+
+        if submit_delete:
+            if not confirmed:
+                st.error("Bitte das Löschen explizit bestätigen.")
+                return
+            if not is_delete_password_valid(entered_password, delete_password):
+                st.error("Lösch-Passwort ist falsch.")
+                return
+            try:
+                with connection_from_url(database_url) as conn:
+                    deleted = delete_import_batch(conn, int(selected_id))
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Import konnte nicht gelöscht werden: {exc}")
+                return
+            if deleted:
+                st.success("Import wurde gelöscht.")
+                st.rerun()
+            else:
+                st.warning("Import wurde nicht gefunden oder war bereits gelöscht.")
 
 
 st.info("Maximale Upload-Größe: 20 MB", icon="ℹ️")
@@ -282,3 +366,6 @@ if isinstance(uploaded_bytes, (bytes, bytearray)) and isinstance(uploaded_name, 
                 file_name=f"duplicates_{base_name}_{today}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+st.divider()
+_render_import_history()

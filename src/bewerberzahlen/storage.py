@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import math
 import re
@@ -206,6 +207,28 @@ def import_cleaned_dataframe(
     return batch_id
 
 
+def list_import_batches(conn: Connection[Any]) -> list[ExistingImport]:
+    ensure_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT id, filename, snapshot_date, created_at, imported_by, row_count
+        FROM import_batches
+        ORDER BY snapshot_date DESC, created_at DESC, id DESC
+        """
+    ).fetchall()
+    return [_existing_import_from_row(row) for row in rows]
+
+
+def delete_import_batch(conn: Connection[Any], batch_id: int) -> bool:
+    if batch_id <= 0:
+        raise ValueError("Ungültige Import-ID.")
+
+    with conn.transaction():
+        ensure_schema(conn)
+        cursor = conn.execute("DELETE FROM import_batches WHERE id = %s", (batch_id,))
+    return cursor.rowcount == 1
+
+
 def find_import_by_hash(conn: Connection[Any], content_hash: str) -> ExistingImport | None:
     row = conn.execute(
         """
@@ -217,6 +240,16 @@ def find_import_by_hash(conn: Connection[Any], content_hash: str) -> ExistingImp
     ).fetchone()
     if row is None:
         return None
+    return _existing_import_from_row(row)
+
+
+def is_delete_password_valid(entered_password: str, expected_password: str | None) -> bool:
+    if expected_password is None or not expected_password:
+        return False
+    return hmac.compare_digest(entered_password, expected_password)
+
+
+def _existing_import_from_row(row: Any) -> ExistingImport:
     return ExistingImport(
         id=int(row[0]),
         filename=str(row[1]),

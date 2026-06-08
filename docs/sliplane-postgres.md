@@ -52,11 +52,13 @@ Im Streamlit-Service die Environment Variable setzen:
 
 ```env
 DATABASE_URL=postgresql://bewerberzahlen_app:<starkes-passwort>@<internal-host>:5432/bewerberzahlen
+IMPORT_DELETE_PASSWORD=<starkes-loesch-passwort>
 ```
 
-`DATABASE_URL` als Secret markieren.
+`DATABASE_URL` und `IMPORT_DELETE_PASSWORD` als Secrets markieren.
 
 Die App legt die Tabellen beim ersten Speichern eines bereinigten Imports automatisch an.
+Das Loeschen gespeicherter Importe ist nur verfuegbar, wenn `IMPORT_DELETE_PASSWORD` gesetzt ist.
 
 ## Erwartetes Schema
 
