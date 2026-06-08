@@ -35,6 +35,7 @@ Die produktive Zielarchitektur ist:
 
 Der Streamlit-Service nutzt den `Dockerfile` im Repository. In Sliplane ist daher kein Override CMD noetig.
 `DATABASE_URL` und `IMPORT_DELETE_PASSWORD` sollten in Sliplane als Secrets gesetzt werden.
+Der Docker-Start kann ueber `STREAMLIT_ENTRYPOINT` gesteuert werden: `src/app.py` fuer die Admin-App und `src/dashboard_app.py` fuer die Dashboard-only-App.
 
 PostgreSQL-Einrichtung: [`docs/sliplane-postgres.md`](docs/sliplane-postgres.md)
 

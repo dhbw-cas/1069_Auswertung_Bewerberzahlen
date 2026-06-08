@@ -53,12 +53,22 @@ Im Streamlit-Service die Environment Variable setzen:
 ```env
 DATABASE_URL=postgresql://bewerberzahlen_app:<starkes-passwort>@<internal-host>:5432/bewerberzahlen
 IMPORT_DELETE_PASSWORD=<starkes-loesch-passwort>
+STREAMLIT_ENTRYPOINT=src/app.py
 ```
 
 `DATABASE_URL` und `IMPORT_DELETE_PASSWORD` als Secrets markieren.
 
 Die App legt die Tabellen beim ersten Speichern eines bereinigten Imports automatisch an.
 Das Loeschen gespeicherter Importe ist nur verfuegbar, wenn `IMPORT_DELETE_PASSWORD` gesetzt ist.
+
+Fuer einen separaten Dashboard-only-Service dieselbe App deployen, aber nur diese Environment Variables setzen:
+
+```env
+DATABASE_URL=postgresql://bewerberzahlen_app:<starkes-passwort>@<internal-host>:5432/bewerberzahlen
+STREAMLIT_ENTRYPOINT=src/dashboard_app.py
+```
+
+Der Dashboard-only-Service bekommt kein `IMPORT_DELETE_PASSWORD`.
 
 ## Erwartetes Schema
 
