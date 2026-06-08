@@ -15,8 +15,8 @@ from bewerberzahlen.storage import (
 def render_dashboard() -> None:
     st.title("Dashboard")
     st.caption(
-        "Die Auswertung zaehlt Bewerbungszeilen ueber historische Snapshots. "
-        "Dies ist keine eindeutige Personen- oder Bewerbungszaehlung."
+        "Die Auswertung zählt Bewerbungszeilen über historische Snapshots. "
+        "Dies ist keine eindeutige Personen- oder Bewerbungszählung."
     )
     database_url = get_database_url()
     if database_url is None:
@@ -72,7 +72,7 @@ def render_dashboard() -> None:
         return
 
     if dashboard_rows.empty:
-        st.info("Keine Daten fuer die gewaehlten Filter vorhanden.")
+        st.info("Keine Daten für die gewählten Filter vorhanden.")
         return
 
     dashboard_rows = dashboard_rows.copy()
@@ -85,7 +85,7 @@ def render_dashboard() -> None:
         "Importe im Filter", f"{dashboard_rows['snapshot_date'].nunique():,}".replace(",", ".")
     )
     metric_col2.metric(
-        "Bewerbungszeilen ueber Snapshots",
+        "Bewerbungszeilen über Snapshots",
         f"{int(dashboard_rows['anzahl'].sum()):,}".replace(",", "."),
     )
     metric_col3.metric("Neuester Snapshot", latest_snapshot.strftime("%d.%m.%Y"))
@@ -93,7 +93,7 @@ def render_dashboard() -> None:
         "Zeilen im neuesten Snapshot", f"{int(latest_rows['anzahl'].sum()):,}".replace(",", ".")
     )
 
-    st.subheader("Entwicklung ueber Snapshot-Datum")
+    st.subheader("Entwicklung über Snapshot-Datum")
     timeline = dashboard_rows.groupby("snapshot_date", as_index=True)["anzahl"].sum().sort_index()
     st.line_chart(timeline)
 
@@ -115,7 +115,7 @@ def render_dashboard() -> None:
         ).sort_index()
         st.line_chart(fachbereich_over_time)
 
-    st.subheader("Top Studiengaenge")
+    st.subheader("Top Studiengänge")
     top_programs = dashboard_rows.groupby("studiengang", as_index=True)["anzahl"].sum().nlargest(15)
     st.bar_chart(top_programs)
 
