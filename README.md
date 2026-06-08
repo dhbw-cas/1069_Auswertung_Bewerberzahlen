@@ -31,6 +31,8 @@ Die produktive Zielarchitektur ist:
 - PostgreSQL als privater TCP-Service mit persistentem Volume.
 - Basic-Auth-Proxy als oeffentlicher HTTP-Service vor der App.
 
+Der Streamlit-Service nutzt den `Dockerfile` im Repository. In Sliplane ist daher kein Override CMD noetig.
+
 PostgreSQL-Einrichtung: [`docs/sliplane-postgres.md`](docs/sliplane-postgres.md)
 
 ## Qualitaetschecks
