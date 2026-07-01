@@ -4,7 +4,15 @@ import pandas as pd
 import streamlit as st
 
 from bewerberzahlen.app_config import get_database_url
+from bewerberzahlen.reports import (
+    BEWERBUNGSZAHLEN_WISE_REPORT_ID,
+    OVERVIEW_REPORT_ID,
+    REPORT_DEFINITIONS,
+    ROW_TYPE_COLUMN,
+    build_bewerbungszahlen_wise_report,
+)
 from bewerberzahlen.storage import (
+    DashboardFilterOptions,
     DashboardFilters,
     connection_from_url,
     get_dashboard_filter_options,
@@ -36,6 +44,21 @@ def render_dashboard() -> None:
         st.info("Noch keine gespeicherten Importe vorhanden.")
         return
 
+    selected_report = st.selectbox(
+        "Bericht",
+        options=REPORT_DEFINITIONS,
+        format_func=lambda report: report.label,
+        key="dashboard_report",
+    )
+    if selected_report.id == BEWERBUNGSZAHLEN_WISE_REPORT_ID:
+        _render_bewerbungszahlen_wise_report(database_url, options)
+    elif selected_report.id == OVERVIEW_REPORT_ID:
+        _render_overview_dashboard(database_url, options)
+    else:
+        st.error("Unbekannter Bericht.")
+
+
+def _render_overview_dashboard(database_url: str, options: DashboardFilterOptions) -> None:
     filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
     with filter_col1:
         selected_semesters = st.multiselect(
@@ -131,6 +154,58 @@ def render_dashboard() -> None:
         }
     ).drop(columns=["semester"])
     st.dataframe(detail_rows, hide_index=True, use_container_width=True)
+
+
+def _render_bewerbungszahlen_wise_report(
+    database_url: str, options: DashboardFilterOptions
+) -> None:
+    st.subheader("Bewerbungszahlen WiSe")
+    st.caption(
+        "Der Bericht bildet den Excel-Bericht nach. Vorjahres-, Prognose- und Zielwertspalten "
+        "sind vorbereitet und werden befüllt, sobald die Referenzdaten importiert werden."
+    )
+
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
+    with filter_col1:
+        selected_semester = st.selectbox(
+            "Semester",
+            options=options.semesters,
+            format_func=semester_label,
+            key="bewerbungszahlen_wise_semester",
+        )
+    with filter_col2:
+        selected_fachbereiche = st.multiselect(
+            "Fachbereich", options=options.fachbereiche, key="bewerbungszahlen_wise_fachbereiche"
+        )
+    with filter_col3:
+        selected_studiengaenge = st.multiselect(
+            "Studiengang", options=options.studiengaenge, key="bewerbungszahlen_wise_studiengaenge"
+        )
+
+    filters = DashboardFilters(
+        semesters=(selected_semester,),
+        fachbereiche=tuple(selected_fachbereiche),
+        studiengaenge=tuple(selected_studiengaenge),
+    )
+    try:
+        with connection_from_url(database_url) as conn:
+            dashboard_rows = load_dashboard_rows(conn, filters)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Berichtsdaten konnten nicht geladen werden: {exc}")
+        return
+
+    report_rows = build_bewerbungszahlen_wise_report(dashboard_rows)
+    if report_rows.empty:
+        st.info("Keine Daten für den gewählten Bericht vorhanden.")
+        return
+
+    st.dataframe(
+        report_rows,
+        hide_index=True,
+        use_container_width=True,
+        height=720,
+        column_config={ROW_TYPE_COLUMN: None},
+    )
 
 
 def _ordered_semester_series(rows: pd.DataFrame, semester_order: list[str]) -> pd.Series:
