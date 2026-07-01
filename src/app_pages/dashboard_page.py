@@ -8,6 +8,7 @@ from bewerberzahlen.app_config import get_database_url
 from bewerberzahlen.reports import (
     BEWERBUNGSZAHLEN_WISE_REPORT_ID,
     OVERVIEW_REPORT_ID,
+    PER_DATO_COLUMN,
     REPORT_DEFINITIONS,
     ROW_TYPE_COLUMN,
     build_bewerbungszahlen_wise_report,
@@ -215,7 +216,10 @@ def _style_bewerbungszahlen_wise_report(report_rows: pd.DataFrame) -> Styler:
             return ["background-color: #bfbfbf; font-weight: 700;"] * len(row)
         if row_type == "Fachbereich":
             return ["background-color: #d9d9d9; font-weight: 700;"] * len(row)
-        return [""] * len(row)
+        return [
+            "background-color: #d9d9d9;" if column == PER_DATO_COLUMN else ""
+            for column in row.index
+        ]
 
     return report_rows.style.apply(style_row, axis=1).hide(axis="columns", subset=[ROW_TYPE_COLUMN])
 
