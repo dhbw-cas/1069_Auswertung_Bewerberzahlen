@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
+from pandas.io.formats.style import Styler
 
 from bewerberzahlen.app_config import get_database_url
 from bewerberzahlen.reports import (
@@ -200,12 +201,23 @@ def _render_bewerbungszahlen_wise_report(
         return
 
     st.dataframe(
-        report_rows,
+        _style_bewerbungszahlen_wise_report(report_rows),
         hide_index=True,
         use_container_width=True,
         height=720,
-        column_config={ROW_TYPE_COLUMN: None},
     )
+
+
+def _style_bewerbungszahlen_wise_report(report_rows: pd.DataFrame) -> Styler:
+    def style_row(row: pd.Series) -> list[str]:
+        row_type = str(row.get(ROW_TYPE_COLUMN, ""))
+        if row_type == "Gesamtsumme":
+            return ["background-color: #bfbfbf; font-weight: 700;"] * len(row)
+        if row_type == "Fachbereich":
+            return ["background-color: #d9d9d9; font-weight: 700;"] * len(row)
+        return [""] * len(row)
+
+    return report_rows.style.apply(style_row, axis=1).hide(axis="columns", subset=[ROW_TYPE_COLUMN])
 
 
 def _ordered_semester_series(rows: pd.DataFrame, semester_order: list[str]) -> pd.Series:
