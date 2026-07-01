@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pandas as pd
+import pytest
+
 from bewerberzahlen.constants import (
     ACCEPTED_COLUMN,
     FACHBEREICH_COLUMN,
@@ -8,7 +11,11 @@ from bewerberzahlen.constants import (
     REJECTION_COLUMN,
     STATUS_COLUMN,
 )
-from bewerberzahlen.io_utils import read_import_csv_from_bytes
+from bewerberzahlen.io_utils import (
+    dataframe_to_excel_bytes,
+    read_cleaned_dataframe_from_bytes,
+    read_import_csv_from_bytes,
+)
 from bewerberzahlen.mapping import ProgramEntry, ProgramResolver
 from bewerberzahlen.pipeline import process_dataframe
 
@@ -111,3 +118,57 @@ def test_import_csv_normalisierte_daten_laufen_durch_pipeline() -> None:
     assert result.cleaned[STATUS_COLUMN].iloc[0] == "Akzeptiert"
     assert result.cleaned[FACHBEREICH_COLUMN].iloc[0] == "Technik"
     assert "Formularfelder_Vorname" not in result.cleaned.columns
+
+
+def test_cleaned_xlsx_kann_wieder_eingelesen_werden() -> None:
+    content = dataframe_to_excel_bytes(
+        pd.DataFrame(
+            [
+                {
+                    STATUS_COLUMN: "Akzeptiert",
+                    FACHBEREICH_COLUMN: "Technik",
+                    PROGRAM_COLUMN: "Informatik",
+                }
+            ]
+        )
+    )
+
+    df = read_cleaned_dataframe_from_bytes(content, "cleaned.xlsx")
+
+    assert df.to_dict("records") == [
+        {
+            STATUS_COLUMN: "Akzeptiert",
+            FACHBEREICH_COLUMN: "Technik",
+            PROGRAM_COLUMN: "Informatik",
+        }
+    ]
+
+
+def test_cleaned_xlsx_lehnt_fehlende_pflichtspalten_ab() -> None:
+    content = dataframe_to_excel_bytes(pd.DataFrame([{STATUS_COLUMN: "Akzeptiert"}]))
+
+    with pytest.raises(ValueError, match="Erforderliche Spalten fehlen"):
+        read_cleaned_dataframe_from_bytes(content, "cleaned.xlsx")
+
+
+def test_cleaned_xlsx_lehnt_personenbezogene_spalten_ab() -> None:
+    content = dataframe_to_excel_bytes(
+        pd.DataFrame(
+            [
+                {
+                    STATUS_COLUMN: "Akzeptiert",
+                    FACHBEREICH_COLUMN: "Technik",
+                    PROGRAM_COLUMN: "Informatik",
+                    "Formularfelder_Vorname": "Max",
+                }
+            ]
+        )
+    )
+
+    with pytest.raises(ValueError, match="personenbezogene Spalten"):
+        read_cleaned_dataframe_from_bytes(content, "cleaned.xlsx")
+
+
+def test_cleaned_upload_erlaubt_nur_xlsx() -> None:
+    with pytest.raises(ValueError, match="XLSX"):
+        read_cleaned_dataframe_from_bytes(b"", "cleaned.csv")

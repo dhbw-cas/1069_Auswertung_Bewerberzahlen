@@ -13,6 +13,7 @@ from bewerberzahlen import (
     ProgramResolver,
     dataframe_to_excel_bytes,
     process_dataframe,
+    read_cleaned_dataframe_from_bytes,
     read_import_csv_from_bytes,
 )
 from bewerberzahlen.app_config import get_database_url
@@ -26,6 +27,8 @@ from bewerberzahlen.storage import (
 )
 
 MAPPING_PATH = Path(__file__).resolve().parents[1] / "data" / "mapping" / "studiengaenge.json"
+CURRENT_CLEANED_SOURCE = "Gerade bereinigte Daten verwenden"
+UPLOADED_CLEANED_SOURCE = "Bearbeitete bereinigte XLSX-Datei hochladen"
 
 
 @st.cache_data(show_spinner=False)
@@ -234,8 +237,52 @@ def _render_cleaned_download_and_import(cleaned: pd.DataFrame, uploaded_name: st
 
     st.divider()
     st.subheader("Bereinigte Daten importieren")
-    content_hash = compute_content_hash(cleaned)
-    st.caption(f"Inhaltsprüfung: `{content_hash[:12]}...`")
+
+    selected_source = st.radio(
+        "Datenquelle für den DB-Import",
+        options=[CURRENT_CLEANED_SOURCE, UPLOADED_CLEANED_SOURCE],
+        horizontal=True,
+    )
+    import_df = cleaned
+    import_filename = uploaded_name
+    import_source_label = "gerade bereinigte Daten"
+
+    if selected_source == UPLOADED_CLEANED_SOURCE:
+        st.info(
+            "Die hochgeladene Datei muss aus dem bereinigten Download stammen und darf keine "
+            "personenbezogenen Spalten enthalten.",
+            icon="ℹ️",
+        )
+        corrected_upload = st.file_uploader(
+            "Bearbeitete bereinigte XLSX-Datei hochladen",
+            type=["xlsx"],
+            accept_multiple_files=False,
+            key="corrected_cleaned_upload",
+        )
+        if corrected_upload is None:
+            st.info("Bitte die bearbeitete bereinigte XLSX-Datei hochladen.")
+            return
+        if corrected_upload.size and corrected_upload.size > 20 * 1024 * 1024:
+            st.error("Datei ist größer als 20 MB und wird nicht verarbeitet.")
+            return
+        try:
+            import_df = read_cleaned_dataframe_from_bytes(
+                corrected_upload.getvalue(), corrected_upload.name
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Konnte bearbeitete bereinigte Datei nicht lesen: {exc}")
+            return
+        import_filename = corrected_upload.name
+        import_source_label = "hochgeladene bearbeitete Datei"
+
+    content_hash = compute_content_hash(import_df)
+    st.caption(
+        f"Importquelle: {import_source_label} | Zeilen: {len(import_df)} | "
+        f"Inhaltsprüfung: `{content_hash[:12]}...`"
+    )
 
     semester_options = build_semester_options()
     with st.form("database_import_form"):
@@ -264,8 +311,8 @@ def _render_cleaned_download_and_import(cleaned: pd.DataFrame, uploaded_name: st
         with connection_from_url(database_url) as conn:
             batch_id = import_cleaned_dataframe(
                 conn,
-                cleaned,
-                filename=uploaded_name,
+                import_df,
+                filename=import_filename,
                 semester=selected_semester.key,
                 imported_by=imported_by,
                 note=note,
@@ -278,7 +325,10 @@ def _render_cleaned_download_and_import(cleaned: pd.DataFrame, uploaded_name: st
         semester_label = (
             selected_semester.label if isinstance(selected_semester, SemesterOption) else ""
         )
-        st.success(f"Import für {semester_label} gespeichert (Batch-ID: {batch_id}).")
+        st.success(
+            f"Import für {semester_label} aus {import_source_label} gespeichert "
+            f"(Batch-ID: {batch_id})."
+        )
 
 
 render_import_page()
