@@ -77,7 +77,7 @@ Die App erstellt automatisch:
 - `import_batches`: ein Datensatz pro gespeicherten Import.
 - `applications`: bereinigte Bewerbungszeilen pro Import.
 
-Doppelte Importe werden über `import_batches.content_hash` verhindert. Der Hash basiert auf dem bereinigten Datenbestand, nicht auf dem Rohdateinamen.
+Beim Speichern wird ein Semester ausgewählt. Die App löscht vorhandene Daten desselben Semesters und schreibt anschließend den neuen vollständigen Datenstand. Daten anderer Semester bleiben erhalten.
 
 ## Lokale Entwicklung
 

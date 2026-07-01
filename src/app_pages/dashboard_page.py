@@ -9,13 +9,15 @@ from bewerberzahlen.storage import (
     connection_from_url,
     get_dashboard_filter_options,
     load_dashboard_rows,
+    semester_label,
+    semester_sort_key,
 )
 
 
 def render_dashboard() -> None:
     st.title("Dashboard")
     st.caption(
-        "Die Auswertung zählt Bewerbungszeilen über historische Snapshots. "
+        "Die Auswertung zählt Bewerbungszeilen über Semester-Datenstände. "
         "Dies ist keine eindeutige Personen- oder Bewerbungszählung."
     )
     database_url = get_database_url()
@@ -30,35 +32,33 @@ def render_dashboard() -> None:
         st.error(f"Dashboard-Filter konnten nicht geladen werden: {exc}")
         return
 
-    if options.min_snapshot_date is None or options.max_snapshot_date is None:
+    if not options.semesters:
         st.info("Noch keine gespeicherten Importe vorhanden.")
         return
 
-    filter_col1, filter_col2, filter_col3, filter_col4, filter_col5 = st.columns(5)
+    filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
     with filter_col1:
-        start_date = st.date_input("Von", value=options.min_snapshot_date, key="dashboard_start")
+        selected_semesters = st.multiselect(
+            "Semester",
+            options=options.semesters,
+            format_func=semester_label,
+            key="dashboard_semesters",
+        )
     with filter_col2:
-        end_date = st.date_input("Bis", value=options.max_snapshot_date, key="dashboard_end")
-    with filter_col3:
         selected_fachbereiche = st.multiselect(
             "Fachbereich", options=options.fachbereiche, key="dashboard_fachbereiche"
         )
-    with filter_col4:
+    with filter_col3:
         selected_studiengaenge = st.multiselect(
             "Studiengang", options=options.studiengaenge, key="dashboard_studiengaenge"
         )
-    with filter_col5:
+    with filter_col4:
         selected_statuses = st.multiselect(
             "Status", options=options.statuses, key="dashboard_statuses"
         )
 
-    if start_date > end_date:
-        st.error("Das Startdatum darf nicht nach dem Enddatum liegen.")
-        return
-
     filters = DashboardFilters(
-        start_date=start_date,
-        end_date=end_date,
+        semesters=tuple(selected_semesters),
         fachbereiche=tuple(selected_fachbereiche),
         studiengaenge=tuple(selected_studiengaenge),
         statuses=tuple(selected_statuses),
@@ -76,43 +76,44 @@ def render_dashboard() -> None:
         return
 
     dashboard_rows = dashboard_rows.copy()
-    dashboard_rows["snapshot_date"] = pd.to_datetime(dashboard_rows["snapshot_date"])
+    semester_order = sorted(dashboard_rows["semester"].unique(), key=semester_sort_key)
+    dashboard_rows["semester_label"] = dashboard_rows["semester"].map(semester_label)
 
-    latest_snapshot = dashboard_rows["snapshot_date"].max()
-    latest_rows = dashboard_rows[dashboard_rows["snapshot_date"] == latest_snapshot]
+    latest_semester = max(dashboard_rows["semester"].unique(), key=semester_sort_key)
+    latest_rows = dashboard_rows[dashboard_rows["semester"] == latest_semester]
     metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
     metric_col1.metric(
-        "Importe im Filter", f"{dashboard_rows['snapshot_date'].nunique():,}".replace(",", ".")
+        "Semester im Filter", f"{dashboard_rows['semester'].nunique():,}".replace(",", ".")
     )
     metric_col2.metric(
-        "Bewerbungszeilen über Snapshots",
+        "Bewerbungszeilen über Semester",
         f"{int(dashboard_rows['anzahl'].sum()):,}".replace(",", "."),
     )
-    metric_col3.metric("Neuester Snapshot", latest_snapshot.strftime("%d.%m.%Y"))
+    metric_col3.metric("Neuester Datenstand", semester_label(latest_semester))
     metric_col4.metric(
-        "Zeilen im neuesten Snapshot", f"{int(latest_rows['anzahl'].sum()):,}".replace(",", ".")
+        "Zeilen im neuesten Datenstand", f"{int(latest_rows['anzahl'].sum()):,}".replace(",", ".")
     )
 
-    st.subheader("Entwicklung über Snapshot-Datum")
-    timeline = dashboard_rows.groupby("snapshot_date", as_index=True)["anzahl"].sum().sort_index()
+    st.subheader("Entwicklung über Semester")
+    timeline = _ordered_semester_series(dashboard_rows, semester_order)
     st.line_chart(timeline)
 
     chart_col1, chart_col2 = st.columns(2)
     with chart_col1:
         st.subheader("Statusentwicklung")
         status_over_time = dashboard_rows.pivot_table(
-            index="snapshot_date", columns="status", values="anzahl", aggfunc="sum", fill_value=0
-        ).sort_index()
+            index="semester_label", columns="status", values="anzahl", aggfunc="sum", fill_value=0
+        ).reindex([semester_label(semester) for semester in semester_order])
         st.line_chart(status_over_time)
     with chart_col2:
         st.subheader("Fachbereichsentwicklung")
         fachbereich_over_time = dashboard_rows.pivot_table(
-            index="snapshot_date",
+            index="semester_label",
             columns="fachbereich",
             values="anzahl",
             aggfunc="sum",
             fill_value=0,
-        ).sort_index()
+        ).reindex([semester_label(semester) for semester in semester_order])
         st.line_chart(fachbereich_over_time)
 
     st.subheader("Top Studiengänge")
@@ -122,15 +123,19 @@ def render_dashboard() -> None:
     st.subheader("Aggregierte Detailtabelle")
     detail_rows = dashboard_rows.rename(
         columns={
-            "snapshot_date": "Snapshot-Datum",
+            "semester_label": "Semester",
             "fachbereich": "Fachbereich",
             "studiengang": "Studiengang",
             "status": "Status",
             "anzahl": "Anzahl",
         }
-    ).copy()
-    detail_rows["Snapshot-Datum"] = detail_rows["Snapshot-Datum"].dt.strftime("%d.%m.%Y")
+    ).drop(columns=["semester"])
     st.dataframe(detail_rows, hide_index=True, use_container_width=True)
+
+
+def _ordered_semester_series(rows: pd.DataFrame, semester_order: list[str]) -> pd.Series:
+    series = rows.groupby("semester_label", as_index=True)["anzahl"].sum()
+    return series.reindex([semester_label(semester) for semester in semester_order])
 
 
 render_dashboard()

@@ -9,6 +9,7 @@ from bewerberzahlen.storage import (
     delete_import_batch,
     is_delete_password_valid,
     list_import_batches,
+    semester_label,
 )
 
 
@@ -33,7 +34,7 @@ def render_data_management_page() -> None:
     import_rows = [
         {
             "ID": batch.id,
-            "Snapshot-Datum": batch.snapshot_date.strftime("%d.%m.%Y"),
+            "Semester": semester_label(batch.semester),
             "Datei": batch.filename,
             "Importiert von": batch.imported_by,
             "Importiert am": batch.created_at.strftime("%d.%m.%Y %H:%M"),
@@ -54,7 +55,7 @@ def render_data_management_page() -> None:
     with st.expander("Import löschen"):
         labels_by_id = {
             batch.id: (
-                f"#{batch.id} | {batch.snapshot_date:%d.%m.%Y} | "
+                f"#{batch.id} | {semester_label(batch.semester)} | "
                 f"{batch.filename} | {batch.row_count} Zeilen"
             )
             for batch in imports

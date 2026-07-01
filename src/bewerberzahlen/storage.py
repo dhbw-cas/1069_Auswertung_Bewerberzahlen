@@ -28,7 +28,7 @@ from .constants import (
 class ExistingImport:
     id: int
     filename: str
-    snapshot_date: date
+    semester: str
     created_at: datetime
     imported_by: str
     row_count: int
@@ -36,8 +36,7 @@ class ExistingImport:
 
 @dataclass(frozen=True)
 class DashboardFilters:
-    start_date: date | None = None
-    end_date: date | None = None
+    semesters: tuple[str, ...] = ()
     fachbereiche: tuple[str, ...] = ()
     studiengaenge: tuple[str, ...] = ()
     statuses: tuple[str, ...] = ()
@@ -45,20 +44,74 @@ class DashboardFilters:
 
 @dataclass(frozen=True)
 class DashboardFilterOptions:
-    min_snapshot_date: date | None
-    max_snapshot_date: date | None
+    semesters: list[str]
     fachbereiche: list[str]
     studiengaenge: list[str]
     statuses: list[str]
 
 
-class DuplicateImportError(ValueError):
-    def __init__(self, existing: ExistingImport):
-        self.existing = existing
-        super().__init__(
-            "Dieser bereinigte Datenbestand wurde bereits importiert: "
-            f"{existing.filename} am {existing.created_at:%d.%m.%Y %H:%M}."
-        )
+@dataclass(frozen=True)
+class SemesterOption:
+    key: str
+    label: str
+    starts_at: date
+    ends_at: date
+
+
+def build_semester_options(
+    today: date | None = None, *, years_back: int = 6
+) -> list[SemesterOption]:
+    reference_year = (today or date.today()).year
+    start_year = reference_year - years_back
+    options: list[SemesterOption] = []
+    for year in range(reference_year, start_year - 1, -1):
+        winter_key = f"WS{year}_{(year + 1) % 100:02d}"
+        summer_key = f"SS{year}"
+        for key in (winter_key, summer_key):
+            starts_at, ends_at = semester_date_range(key)
+            options.append(
+                SemesterOption(
+                    key=key,
+                    label=semester_label(key),
+                    starts_at=starts_at,
+                    ends_at=ends_at,
+                )
+            )
+    return options
+
+
+def semester_label(semester: str) -> str:
+    if match := re.fullmatch(r"SS(\d{4})", semester):
+        return f"Sommersemester {match.group(1)}"
+    if match := re.fullmatch(r"WS(\d{4})_(\d{2})", semester):
+        return f"Wintersemester {match.group(1)}/{match.group(2)}"
+    return semester
+
+
+def semester_date_range(semester: str) -> tuple[date, date]:
+    if match := re.fullmatch(r"SS(\d{4})", semester):
+        year = int(match.group(1))
+        return date(year - 1, 7, 1), date(year, 1, 15)
+    if match := re.fullmatch(r"WS(\d{4})_(\d{2})", semester):
+        year = int(match.group(1))
+        expected_next_year = (year + 1) % 100
+        if int(match.group(2)) != expected_next_year:
+            raise ValueError(f"Ungültiges Semester: {semester}")
+        return date(year, 1, 16), date(year, 6, 30)
+    raise ValueError(f"Ungültiges Semester: {semester}")
+
+
+def semester_from_snapshot_date(snapshot_date: date) -> str:
+    if snapshot_date.month == 1 and snapshot_date.day <= 15:
+        return f"SS{snapshot_date.year}"
+    if snapshot_date.month >= 7:
+        return f"SS{snapshot_date.year + 1}"
+    return f"WS{snapshot_date.year}_{(snapshot_date.year + 1) % 100:02d}"
+
+
+def semester_sort_key(semester: str) -> date:
+    starts_at, _ = semester_date_range(semester)
+    return starts_at
 
 
 def connection_from_url(database_url: str) -> Connection[Any]:
@@ -71,14 +124,22 @@ def ensure_schema(conn: Connection[Any]) -> None:
         CREATE TABLE IF NOT EXISTS import_batches (
             id BIGSERIAL PRIMARY KEY,
             filename TEXT NOT NULL,
-            snapshot_date DATE NOT NULL,
+            snapshot_date DATE,
+            semester TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             imported_by TEXT NOT NULL CHECK (length(trim(imported_by)) > 0),
             row_count INTEGER NOT NULL CHECK (row_count >= 0),
-            content_hash TEXT NOT NULL UNIQUE,
+            content_hash TEXT NOT NULL,
             note TEXT
         )
         """
+    )
+    conn.execute("ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS semester TEXT")
+    conn.execute("ALTER TABLE import_batches ALTER COLUMN snapshot_date DROP NOT NULL")
+    _migrate_legacy_semesters(conn)
+    conn.execute("ALTER TABLE import_batches ALTER COLUMN semester SET NOT NULL")
+    conn.execute(
+        "ALTER TABLE import_batches DROP CONSTRAINT IF EXISTS import_batches_content_hash_key"
     )
     conn.execute(
         """
@@ -101,8 +162,7 @@ def ensure_schema(conn: Connection[Any]) -> None:
         """
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_import_batches_snapshot_date "
-        "ON import_batches (snapshot_date)"
+        "CREATE INDEX IF NOT EXISTS idx_import_batches_semester ON import_batches (semester)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_applications_batch_id ON applications (batch_id)")
     conn.execute(
@@ -124,6 +184,21 @@ def compute_content_hash(df: pd.DataFrame) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _migrate_legacy_semesters(conn: Connection[Any]) -> None:
+    rows = conn.execute(
+        """
+        SELECT id, snapshot_date
+        FROM import_batches
+        WHERE semester IS NULL AND snapshot_date IS NOT NULL
+        """
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "UPDATE import_batches SET semester = %s WHERE id = %s",
+            (semester_from_snapshot_date(row[1]), int(row[0])),
+        )
+
+
 def normalize_imported_by(imported_by: str) -> str:
     normalized = imported_by.strip()
     if not normalized:
@@ -131,26 +206,12 @@ def normalize_imported_by(imported_by: str) -> str:
     return normalized
 
 
-def extract_snapshot_date(filename: str, default: date | None = None) -> date | None:
-    separated_match = re.search(r"(\d{1,2})[._-](\d{1,2})[._-](\d{4})", filename)
-    if separated_match:
-        day, month, year = (int(part) for part in separated_match.groups())
-        return date(year, month, day)
-
-    compact_match = re.search(r"(?<!\d)(\d{2})(\d{2})(\d{2})(?!\d)", filename)
-    if compact_match:
-        day, month, year_short = (int(part) for part in compact_match.groups())
-        return date(2000 + year_short, month, day)
-
-    return default
-
-
 def import_cleaned_dataframe(
     conn: Connection[Any],
     df: pd.DataFrame,
     *,
     filename: str,
-    snapshot_date: date,
+    semester: str,
     imported_by: str,
     note: str | None = None,
 ) -> int:
@@ -159,24 +220,31 @@ def import_cleaned_dataframe(
 
     normalized_imported_by = normalize_imported_by(imported_by)
     content_hash = compute_content_hash(df)
+    semester_start, semester_end = semester_date_range(semester)
 
     with conn.transaction():
         ensure_schema(conn)
-        existing = find_import_by_hash(conn, content_hash)
-        if existing is not None:
-            raise DuplicateImportError(existing)
+        conn.execute(
+            """
+            DELETE FROM import_batches
+            WHERE semester = %s
+               OR (snapshot_date IS NOT NULL AND snapshot_date BETWEEN %s AND %s)
+            """,
+            (semester, semester_start, semester_end),
+        )
 
         row = conn.execute(
             """
             INSERT INTO import_batches (
-                filename, snapshot_date, imported_by, row_count, content_hash, note
+                filename, snapshot_date, semester, imported_by, row_count, content_hash, note
             )
-            VALUES (%s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
                 filename,
-                snapshot_date,
+                None,
+                semester,
                 normalized_imported_by,
                 len(df),
                 content_hash,
@@ -229,12 +297,16 @@ def list_import_batches(conn: Connection[Any]) -> list[ExistingImport]:
     ensure_schema(conn)
     rows = conn.execute(
         """
-        SELECT id, filename, snapshot_date, created_at, imported_by, row_count
+        SELECT id, filename, semester, created_at, imported_by, row_count
         FROM import_batches
-        ORDER BY snapshot_date DESC, created_at DESC, id DESC
+        ORDER BY created_at DESC, id DESC
         """
     ).fetchall()
-    return [_existing_import_from_row(row) for row in rows]
+    return sorted(
+        [_existing_import_from_row(row) for row in rows],
+        key=lambda row: (semester_sort_key(row.semester), row.created_at, row.id),
+        reverse=True,
+    )
 
 
 def delete_import_batch(conn: Connection[Any], batch_id: int) -> bool:
@@ -249,15 +321,12 @@ def delete_import_batch(conn: Connection[Any], batch_id: int) -> bool:
 
 def get_dashboard_filter_options(conn: Connection[Any]) -> DashboardFilterOptions:
     ensure_schema(conn)
-    date_row = conn.execute(
-        "SELECT MIN(snapshot_date), MAX(snapshot_date) FROM import_batches"
-    ).fetchone()
+    semesters = _fetch_existing_semesters(conn)
     fachbereiche = _fetch_distinct_values(conn, "fachbereich")
     studiengaenge = _fetch_distinct_values(conn, "studiengang")
     statuses = _fetch_distinct_values(conn, "status")
     return DashboardFilterOptions(
-        min_snapshot_date=date_row[0] if date_row else None,
-        max_snapshot_date=date_row[1] if date_row else None,
+        semesters=semesters,
         fachbereiche=fachbereiche,
         studiengaenge=studiengaenge,
         statuses=statuses,
@@ -272,7 +341,7 @@ def load_dashboard_rows(
     rows = conn.execute(
         f"""
         SELECT
-            b.snapshot_date,
+            b.semester,
             a.fachbereich,
             a.studiengang,
             a.status,
@@ -280,14 +349,14 @@ def load_dashboard_rows(
         FROM applications a
         JOIN import_batches b ON b.id = a.batch_id
         {where_sql}
-        GROUP BY b.snapshot_date, a.fachbereich, a.studiengang, a.status
-        ORDER BY b.snapshot_date, a.fachbereich, a.studiengang, a.status
+        GROUP BY b.semester, a.fachbereich, a.studiengang, a.status
+        ORDER BY b.semester, a.fachbereich, a.studiengang, a.status
         """,
         tuple(params),
     ).fetchall()
     records = [
         {
-            "snapshot_date": row[0],
+            "semester": str(row[0]),
             "fachbereich": str(row[1]),
             "studiengang": str(row[2]),
             "status": str(row[3]),
@@ -297,28 +366,26 @@ def load_dashboard_rows(
     ]
     return pd.DataFrame(
         records,
-        columns=["snapshot_date", "fachbereich", "studiengang", "status", "anzahl"],
+        columns=["semester", "fachbereich", "studiengang", "status", "anzahl"],
     )
-
-
-def find_import_by_hash(conn: Connection[Any], content_hash: str) -> ExistingImport | None:
-    row = conn.execute(
-        """
-        SELECT id, filename, snapshot_date, created_at, imported_by, row_count
-        FROM import_batches
-        WHERE content_hash = %s
-        """,
-        (content_hash,),
-    ).fetchone()
-    if row is None:
-        return None
-    return _existing_import_from_row(row)
 
 
 def is_delete_password_valid(entered_password: str, expected_password: str | None) -> bool:
     if expected_password is None or not expected_password:
         return False
     return hmac.compare_digest(entered_password, expected_password)
+
+
+def _fetch_existing_semesters(conn: Connection[Any]) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT semester
+        FROM import_batches
+        WHERE semester IS NOT NULL AND length(trim(semester)) > 0
+        """
+    ).fetchall()
+    semesters = [str(row[0]) for row in rows]
+    return sorted(semesters, key=semester_sort_key, reverse=True)
 
 
 def _fetch_distinct_values(conn: Connection[Any], column: str) -> list[str]:
@@ -339,13 +406,7 @@ def _build_dashboard_where(filters: DashboardFilters) -> tuple[str, list[object]
     clauses: list[str] = []
     params: list[object] = []
 
-    if filters.start_date is not None:
-        clauses.append("b.snapshot_date >= %s")
-        params.append(filters.start_date)
-    if filters.end_date is not None:
-        clauses.append("b.snapshot_date <= %s")
-        params.append(filters.end_date)
-
+    _add_in_filter(clauses, params, "b.semester", filters.semesters)
     _add_in_filter(clauses, params, "a.fachbereich", filters.fachbereiche)
     _add_in_filter(clauses, params, "a.studiengang", filters.studiengaenge)
     _add_in_filter(clauses, params, "a.status", filters.statuses)
@@ -370,7 +431,7 @@ def _existing_import_from_row(row: Any) -> ExistingImport:
     return ExistingImport(
         id=int(row[0]),
         filename=str(row[1]),
-        snapshot_date=row[2],
+        semester=str(row[2]),
         created_at=row[3],
         imported_by=str(row[4]),
         row_count=int(row[5]),

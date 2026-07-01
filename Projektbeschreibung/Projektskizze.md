@@ -49,7 +49,7 @@ Code-Struktur:
 
 - `src/app_pages/import_page.py`: Upload, Bereinigung, Download und Import in PostgreSQL.
 - `src/app_pages/data_management_page.py`: Import-Historie und passwortgeschütztes Löschen.
-- `src/app_pages/dashboard_page.py`: Berichte über historische Snapshots.
+- `src/app_pages/dashboard_page.py`: Berichte über Semester-Datenstände.
 - `src/bewerberzahlen/pipeline.py`: fachliche Bereinigungslogik.
 - `src/bewerberzahlen/storage.py`: PostgreSQL-Schema, Speicherung, Historie, Löschen und Dashboard-Abfragen.
 - `src/bewerberzahlen/app_config.py`: Umgebungsvariablen und Streamlit-Secrets.
@@ -58,8 +58,8 @@ Datenhaltung:
 
 - Es werden nur bereinigte Daten ohne personenbezogene Felder gespeichert.
 - Jeder Import erzeugt einen Eintrag in `import_batches` und zugehörige Zeilen in `applications`.
-- Doppelte Importe werden über einen Hash des bereinigten Datenbestands verhindert.
-- Das `snapshot_date` stammt aus dem Dateinamen und ist die Zeitachse der Berichte.
+- Beim Speichern wird ein Semester ausgewählt. Bestehende Daten desselben Semesters werden ersetzt, Daten anderer Semester bleiben erhalten.
+- Alte Datenstände mit `snapshot_date` werden beim nächsten Upload anhand des Bewerbungszeitraums dem gewählten Semester zugeordnet und ersetzt.
 
 ---
 
@@ -124,7 +124,7 @@ Die so bereinigte und aufbereitete Datei soll als Download angeboten werden
 ## Phase 2: Historische Auswertungen
 
 In der zweiten Phase wird auf den bereinigten Daten aufgebaut:
-Diese Daten werden in PostgreSQL gespeichert unter Ergänzung eines Datumsstempels aus dem Dateinamen, um einen historischen Datenbestand aufzubauen.
+Diese Daten werden in PostgreSQL pro Semester gespeichert. Jeder Upload liefert einen vollständigen Datenstand für das ausgewählte Semester und ersetzt den bisherigen Stand dieses Semesters.
 - Aufbau einer **persistenten Datenbasis**
 - Durchführung von **Zeitreihenanalysen**
 - Ermöglichung von **historischen Vergleichen** (z. B. Bewerberzahlen pro Zeitraum, Studiengang, Fachbereich)

@@ -18,10 +18,10 @@ from bewerberzahlen import (
 from bewerberzahlen.app_config import get_database_url
 from bewerberzahlen.constants import PROGRAM_COLUMN, STATUS_COLUMN
 from bewerberzahlen.storage import (
-    DuplicateImportError,
+    SemesterOption,
+    build_semester_options,
     compute_content_hash,
     connection_from_url,
-    extract_snapshot_date,
     import_cleaned_dataframe,
 )
 
@@ -237,13 +237,14 @@ def _render_cleaned_download_and_import(cleaned: pd.DataFrame, uploaded_name: st
     content_hash = compute_content_hash(cleaned)
     st.caption(f"Inhaltsprüfung: `{content_hash[:12]}...`")
 
-    guessed_snapshot_date = extract_snapshot_date(uploaded_name, default=date.today())
+    semester_options = build_semester_options()
     with st.form("database_import_form"):
         imported_by = st.text_input("Importiert von *")
-        snapshot_date = st.date_input(
-            "Snapshot-Datum",
-            value=guessed_snapshot_date or date.today(),
-            help="Aus dem Dateinamen vorbelegt, kann vor dem Speichern korrigiert werden.",
+        selected_semester = st.selectbox(
+            "Semester *",
+            options=semester_options,
+            format_func=lambda option: option.label,
+            help="Beim Speichern werden bestehende Daten dieses Semesters vollständig ersetzt.",
         )
         note = st.text_area("Notiz", placeholder="Optional")
         save_to_database = st.form_submit_button("In Datenbank speichern", type="primary")
@@ -265,18 +266,19 @@ def _render_cleaned_download_and_import(cleaned: pd.DataFrame, uploaded_name: st
                 conn,
                 cleaned,
                 filename=uploaded_name,
-                snapshot_date=snapshot_date,
+                semester=selected_semester.key,
                 imported_by=imported_by,
                 note=note,
             )
-    except DuplicateImportError as exc:
-        st.error(str(exc))
     except ValueError as exc:
         st.error(str(exc))
     except Exception as exc:  # noqa: BLE001
         st.error(f"Speichern fehlgeschlagen: {exc}")
     else:
-        st.success(f"Import gespeichert (Batch-ID: {batch_id}).")
+        semester_label = (
+            selected_semester.label if isinstance(selected_semester, SemesterOption) else ""
+        )
+        st.success(f"Import für {semester_label} gespeichert (Batch-ID: {batch_id}).")
 
 
 render_import_page()
