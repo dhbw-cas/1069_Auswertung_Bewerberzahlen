@@ -69,8 +69,9 @@ def build_bewerbungszahlen_wise_report(dashboard_rows: pd.DataFrame) -> pd.DataF
     rows: list[dict[str, object]] = []
     prepared = _prepare_status_counts(dashboard_rows)
     for fachbereich in _ordered_fachbereiche(prepared):
-        fachbereich_rows = prepared[prepared["fachbereich"] == fachbereich]
-        for _, row in fachbereich_rows.sort_values("studiengang").iterrows():
+        fachbereich_rows = prepared[prepared["fachbereich"] == fachbereich].copy()
+        sorted_rows = fachbereich_rows.sort_values(by="studiengang")
+        for _, row in sorted_rows.iterrows():
             rows.append(_report_row(str(row["studiengang"]), row, "Studiengang"))
         rows.append(_summary_row(_fachbereich_label(fachbereich), fachbereich_rows, "Fachbereich"))
 

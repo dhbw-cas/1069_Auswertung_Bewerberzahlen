@@ -19,7 +19,7 @@ Die Seiten liegen unter `src/app_pages/`:
 
 - `import_page.py`: CSV-Upload, Bereinigung, Download und Speichern in PostgreSQL.
 - `data_management_page.py`: Import-Historie und passwortgeschütztes Löschen gespeicherter Importe.
-- `dashboard_page.py`: Berichte, Filter, Kennzahlen und Diagramme über Semester-Datenstände.
+- `dashboard_page.py`: Berichte, Filter, Kennzahlen und Diagramme über Datenbestände.
 
 Die fachliche Logik liegt in `src/bewerberzahlen/`:
 
@@ -28,7 +28,7 @@ Die fachliche Logik liegt in `src/bewerberzahlen/`:
 - `mapping.py`: Studiengang-zu-Fachbereich-Auflösung.
 - `app_config.py`: Zugriff auf Umgebungsvariablen und Streamlit-Secrets.
 
-PostgreSQL speichert nur bereinigte Daten ohne personenbezogene Felder. Beim Speichern wird ein Semester ausgewählt; bestehende Daten desselben Semesters werden vollständig ersetzt, andere Semester bleiben erhalten.
+PostgreSQL speichert nur bereinigte Daten ohne personenbezogene Felder. Beim Speichern wird ein Berichtsdatum ausgewählt; pro Berichtsdatum existiert höchstens ein Datenbestand. Ein vorhandener Datenbestand wird nur nach expliziter Bestätigung ersetzt.
 
 ## Lokal starten
 

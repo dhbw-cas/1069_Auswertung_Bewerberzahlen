@@ -6,10 +6,10 @@ import streamlit as st
 from bewerberzahlen.app_config import get_config_value, get_database_url
 from bewerberzahlen.storage import (
     connection_from_url,
+    dataset_label,
     delete_import_batch,
     is_delete_password_valid,
     list_import_batches,
-    semester_label,
 )
 
 
@@ -34,7 +34,7 @@ def render_data_management_page() -> None:
     import_rows = [
         {
             "ID": batch.id,
-            "Semester": semester_label(batch.semester),
+            "Datenbestand": dataset_label(batch),
             "Datei": batch.filename,
             "Importiert von": batch.imported_by,
             "Importiert am": batch.created_at.strftime("%d.%m.%Y %H:%M"),
@@ -55,7 +55,7 @@ def render_data_management_page() -> None:
     with st.expander("Import löschen"):
         labels_by_id = {
             batch.id: (
-                f"#{batch.id} | {semester_label(batch.semester)} | "
+                f"#{batch.id} | {dataset_label(batch)} | "
                 f"{batch.filename} | {batch.row_count} Zeilen"
             )
             for batch in imports

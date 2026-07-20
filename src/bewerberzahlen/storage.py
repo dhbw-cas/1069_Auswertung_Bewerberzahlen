@@ -5,6 +5,7 @@ import hmac
 import json
 import math
 import re
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -28,7 +29,7 @@ from .constants import (
 class ExistingImport:
     id: int
     filename: str
-    semester: str
+    report_date: date | None
     created_at: datetime
     imported_by: str
     row_count: int
@@ -36,6 +37,7 @@ class ExistingImport:
 
 @dataclass(frozen=True)
 class DashboardFilters:
+    batch_ids: tuple[int, ...] = ()
     semesters: tuple[str, ...] = ()
     fachbereiche: tuple[str, ...] = ()
     studiengaenge: tuple[str, ...] = ()
@@ -44,7 +46,7 @@ class DashboardFilters:
 
 @dataclass(frozen=True)
 class DashboardFilterOptions:
-    semesters: list[str]
+    datasets: list[ExistingImport]
     fachbereiche: list[str]
     studiengaenge: list[str]
     statuses: list[str]
@@ -56,6 +58,19 @@ class SemesterOption:
     label: str
     starts_at: date
     ends_at: date
+
+
+@dataclass(frozen=True)
+class ReportDateOption:
+    value: date
+    label: str
+
+
+class DatasetAlreadyExistsError(ValueError):
+    def __init__(self, existing: ExistingImport):
+        self.existing = existing
+        label = dataset_label(existing)
+        super().__init__(f"Für {label} existiert bereits ein Datenbestand.")
 
 
 def build_semester_options(
@@ -78,6 +93,41 @@ def build_semester_options(
                 )
             )
     return options
+
+
+def build_report_date_options(
+    today: date | None = None, *, option_count: int = 10
+) -> list[ReportDateOption]:
+    reference = today or date.today()
+    candidates: list[date] = []
+    year = reference.year
+    month = reference.month
+
+    while len(candidates) < option_count:
+        last_day = monthrange(year, month)[1]
+        for day in (last_day, 15):
+            candidate = date(year, month, day)
+            if candidate <= reference:
+                candidates.append(candidate)
+        month -= 1
+        if month == 0:
+            month = 12
+            year -= 1
+
+    return [
+        ReportDateOption(value=report_date, label=format_report_date(report_date))
+        for report_date in sorted(candidates, reverse=True)[:option_count]
+    ]
+
+
+def format_report_date(report_date: date) -> str:
+    return report_date.strftime("%d.%m.%Y")
+
+
+def dataset_label(dataset: ExistingImport) -> str:
+    if dataset.report_date is None:
+        return f"Legacy-Datenbestand #{dataset.id}"
+    return f"Datenbestand vom {format_report_date(dataset.report_date)}"
 
 
 def semester_label(semester: str) -> str:
@@ -125,7 +175,8 @@ def ensure_schema(conn: Connection[Any]) -> None:
             id BIGSERIAL PRIMARY KEY,
             filename TEXT NOT NULL,
             snapshot_date DATE,
-            semester TEXT NOT NULL,
+            semester TEXT,
+            report_date DATE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             imported_by TEXT NOT NULL CHECK (length(trim(imported_by)) > 0),
             row_count INTEGER NOT NULL CHECK (row_count >= 0),
@@ -135,9 +186,10 @@ def ensure_schema(conn: Connection[Any]) -> None:
         """
     )
     conn.execute("ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS semester TEXT")
+    conn.execute("ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS report_date DATE")
     conn.execute("ALTER TABLE import_batches ALTER COLUMN snapshot_date DROP NOT NULL")
+    conn.execute("ALTER TABLE import_batches ALTER COLUMN semester DROP NOT NULL")
     _migrate_legacy_semesters(conn)
-    conn.execute("ALTER TABLE import_batches ALTER COLUMN semester SET NOT NULL")
     conn.execute(
         "ALTER TABLE import_batches DROP CONSTRAINT IF EXISTS import_batches_content_hash_key"
     )
@@ -163,6 +215,10 @@ def ensure_schema(conn: Connection[Any]) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_import_batches_semester ON import_batches (semester)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_import_batches_report_date_unique "
+        "ON import_batches (report_date) WHERE report_date IS NOT NULL"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_applications_batch_id ON applications (batch_id)")
     conn.execute(
@@ -211,40 +267,45 @@ def import_cleaned_dataframe(
     df: pd.DataFrame,
     *,
     filename: str,
-    semester: str,
+    report_date: date,
     imported_by: str,
     note: str | None = None,
+    replace_existing: bool = False,
 ) -> int:
     if df.empty:
         raise ValueError("Es können keine leeren Datenbestände importiert werden.")
 
     normalized_imported_by = normalize_imported_by(imported_by)
     content_hash = compute_content_hash(df)
-    semester_start, semester_end = semester_date_range(semester)
 
     with conn.transaction():
         ensure_schema(conn)
-        conn.execute(
-            """
-            DELETE FROM import_batches
-            WHERE semester = %s
-               OR (snapshot_date IS NOT NULL AND snapshot_date BETWEEN %s AND %s)
-            """,
-            (semester, semester_start, semester_end),
-        )
+        existing = find_dataset_by_report_date(conn, report_date)
+        if existing is not None and not replace_existing:
+            raise DatasetAlreadyExistsError(existing)
+        if existing is not None:
+            conn.execute("DELETE FROM import_batches WHERE id = %s", (existing.id,))
 
         row = conn.execute(
             """
             INSERT INTO import_batches (
-                filename, snapshot_date, semester, imported_by, row_count, content_hash, note
+                filename,
+                snapshot_date,
+                semester,
+                report_date,
+                imported_by,
+                row_count,
+                content_hash,
+                note
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
                 filename,
                 None,
-                semester,
+                None,
+                report_date,
                 normalized_imported_by,
                 len(df),
                 content_hash,
@@ -297,16 +358,39 @@ def list_import_batches(conn: Connection[Any]) -> list[ExistingImport]:
     ensure_schema(conn)
     rows = conn.execute(
         """
-        SELECT id, filename, semester, created_at, imported_by, row_count
+        SELECT id, filename, report_date, created_at, imported_by, row_count
         FROM import_batches
-        ORDER BY created_at DESC, id DESC
+        ORDER BY report_date DESC NULLS LAST, created_at DESC, id DESC
         """
     ).fetchall()
-    return sorted(
-        [_existing_import_from_row(row) for row in rows],
-        key=lambda row: (semester_sort_key(row.semester), row.created_at, row.id),
-        reverse=True,
-    )
+    return [_existing_import_from_row(row) for row in rows]
+
+
+def list_datasets(conn: Connection[Any]) -> list[ExistingImport]:
+    ensure_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT id, filename, report_date, created_at, imported_by, row_count
+        FROM import_batches
+        WHERE report_date IS NOT NULL
+        ORDER BY report_date DESC, created_at DESC, id DESC
+        """
+    ).fetchall()
+    return [_existing_import_from_row(row) for row in rows]
+
+
+def find_dataset_by_report_date(conn: Connection[Any], report_date: date) -> ExistingImport | None:
+    row = conn.execute(
+        """
+        SELECT id, filename, report_date, created_at, imported_by, row_count
+        FROM import_batches
+        WHERE report_date = %s
+        """,
+        (report_date,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _existing_import_from_row(row)
 
 
 def delete_import_batch(conn: Connection[Any], batch_id: int) -> bool:
@@ -321,12 +405,12 @@ def delete_import_batch(conn: Connection[Any], batch_id: int) -> bool:
 
 def get_dashboard_filter_options(conn: Connection[Any]) -> DashboardFilterOptions:
     ensure_schema(conn)
-    semesters = _fetch_existing_semesters(conn)
+    datasets = list_datasets(conn)
     fachbereiche = _fetch_distinct_values(conn, "fachbereich")
     studiengaenge = _fetch_distinct_values(conn, "studiengang")
     statuses = _fetch_distinct_values(conn, "status")
     return DashboardFilterOptions(
-        semesters=semesters,
+        datasets=datasets,
         fachbereiche=fachbereiche,
         studiengaenge=studiengaenge,
         statuses=statuses,
@@ -341,7 +425,8 @@ def load_dashboard_rows(
     rows = conn.execute(
         f"""
         SELECT
-            b.semester,
+            b.id,
+            b.report_date,
             a.fachbereich,
             a.studiengang,
             a.status,
@@ -349,24 +434,25 @@ def load_dashboard_rows(
         FROM applications a
         JOIN import_batches b ON b.id = a.batch_id
         {where_sql}
-        GROUP BY b.semester, a.fachbereich, a.studiengang, a.status
-        ORDER BY b.semester, a.fachbereich, a.studiengang, a.status
+        GROUP BY b.id, b.report_date, a.fachbereich, a.studiengang, a.status
+        ORDER BY b.report_date, a.fachbereich, a.studiengang, a.status
         """,
         tuple(params),
     ).fetchall()
     records = [
         {
-            "semester": str(row[0]),
-            "fachbereich": str(row[1]),
-            "studiengang": str(row[2]),
-            "status": str(row[3]),
-            "anzahl": int(row[4]),
+            "dataset_id": int(row[0]),
+            "report_date": row[1],
+            "fachbereich": str(row[2]),
+            "studiengang": str(row[3]),
+            "status": str(row[4]),
+            "anzahl": int(row[5]),
         }
         for row in rows
     ]
     return pd.DataFrame(
         records,
-        columns=["semester", "fachbereich", "studiengang", "status", "anzahl"],
+        columns=["dataset_id", "report_date", "fachbereich", "studiengang", "status", "anzahl"],
     )
 
 
@@ -406,6 +492,7 @@ def _build_dashboard_where(filters: DashboardFilters) -> tuple[str, list[object]
     clauses: list[str] = []
     params: list[object] = []
 
+    _add_int_in_filter(clauses, params, "b.id", filters.batch_ids)
     _add_in_filter(clauses, params, "b.semester", filters.semesters)
     _add_in_filter(clauses, params, "a.fachbereich", filters.fachbereiche)
     _add_in_filter(clauses, params, "a.studiengang", filters.studiengaenge)
@@ -414,6 +501,17 @@ def _build_dashboard_where(filters: DashboardFilters) -> tuple[str, list[object]
     if not clauses:
         return "", params
     return "WHERE " + " AND ".join(clauses), params
+
+
+def _add_int_in_filter(
+    clauses: list[str], params: list[object], column: str, values: tuple[int, ...]
+) -> None:
+    normalized_values = tuple(value for value in values if value > 0)
+    if not normalized_values:
+        return
+    placeholders = ", ".join(["%s"] * len(normalized_values))
+    clauses.append(f"{column} IN ({placeholders})")
+    params.extend(normalized_values)
 
 
 def _add_in_filter(
@@ -431,7 +529,7 @@ def _existing_import_from_row(row: Any) -> ExistingImport:
     return ExistingImport(
         id=int(row[0]),
         filename=str(row[1]),
-        semester=str(row[2]),
+        report_date=row[2],
         created_at=row[3],
         imported_by=str(row[4]),
         row_count=int(row[5]),

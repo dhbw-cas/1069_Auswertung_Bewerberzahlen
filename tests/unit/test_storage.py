@@ -17,8 +17,11 @@ from bewerberzahlen.constants import (
 )
 from bewerberzahlen.storage import (
     DashboardFilters,
+    DatasetAlreadyExistsError,
+    build_report_date_options,
     build_semester_options,
     compute_content_hash,
+    dataset_label,
     delete_import_batch,
     get_dashboard_filter_options,
     import_cleaned_dataframe,
@@ -59,6 +62,7 @@ class _FakeConnection:
         delete_rowcount: int = 0,
         dashboard_rows: list[tuple[object, ...]] | None = None,
         existing_semesters: list[str] | None = None,
+        existing_dataset: tuple[object, ...] | None = None,
         distinct_values: dict[str, list[str]] | None = None,
         legacy_rows: list[tuple[object, ...]] | None = None,
         insert_id: int = 11,
@@ -67,6 +71,7 @@ class _FakeConnection:
         self.delete_rowcount = delete_rowcount
         self.dashboard_rows = dashboard_rows or []
         self.existing_semesters = existing_semesters or []
+        self.existing_dataset = existing_dataset
         self.distinct_values = distinct_values or {}
         self.legacy_rows = legacy_rows or []
         self.insert_id = insert_id
@@ -78,11 +83,15 @@ class _FakeConnection:
             return _Cursor(rows=self.legacy_rows)
         if "SELECT DISTINCT semester" in query:
             return _Cursor(rows=[(semester,) for semester in self.existing_semesters])
+        if "WHERE report_date = %s" in query:
+            return _Cursor(rows=[self.existing_dataset] if self.existing_dataset else [])
         for column in ("fachbereich", "studiengang", "status"):
             if f"SELECT DISTINCT {column}" in query:
                 return _Cursor(rows=[(value,) for value in self.distinct_values.get(column, [])])
         if "COUNT(*) AS anzahl" in query:
             return _Cursor(rows=self.dashboard_rows)
+        if "WHERE report_date IS NOT NULL" in query:
+            return _Cursor(rows=self.rows)
         if "SELECT id, filename" in query:
             return _Cursor(rows=self.rows)
         if "INSERT INTO import_batches" in query:
@@ -180,11 +189,38 @@ def test_build_semester_options_bietet_aktuelle_und_ruecklaufende_semester() -> 
     assert "Sommersemester 2020" in [option.label for option in options]
 
 
+def test_build_report_date_options_liefert_letzte_zehn_stichtage() -> None:
+    options = build_report_date_options(today=date(2026, 8, 17))
+
+    assert [option.value for option in options] == [
+        date(2026, 8, 15),
+        date(2026, 7, 31),
+        date(2026, 7, 15),
+        date(2026, 6, 30),
+        date(2026, 6, 15),
+        date(2026, 5, 31),
+        date(2026, 5, 15),
+        date(2026, 4, 30),
+        date(2026, 4, 15),
+        date(2026, 3, 31),
+    ]
+
+
+def test_build_report_date_options_beruecksichtigt_schaltjahr() -> None:
+    options = build_report_date_options(today=date(2024, 3, 1))
+
+    assert [option.value for option in options[:3]] == [
+        date(2024, 2, 29),
+        date(2024, 2, 15),
+        date(2024, 1, 31),
+    ]
+
+
 def test_list_import_batches_mappt_db_rows() -> None:
     created_at = datetime(2026, 6, 8, 10, 30, tzinfo=UTC)
     conn = cast(
         Any,
-        _FakeConnection(rows=[(7, "Export_110526.csv", "WS2026_27", created_at, "Nico", 42)]),
+        _FakeConnection(rows=[(7, "Export_110526.csv", date(2026, 8, 15), created_at, "Nico", 42)]),
     )
 
     batches = list_import_batches(conn)
@@ -192,13 +228,14 @@ def test_list_import_batches_mappt_db_rows() -> None:
     assert len(batches) == 1
     assert batches[0].id == 7
     assert batches[0].filename == "Export_110526.csv"
-    assert batches[0].semester == "WS2026_27"
+    assert batches[0].report_date == date(2026, 8, 15)
+    assert dataset_label(batches[0]) == "Datenbestand vom 15.08.2026"
     assert batches[0].created_at == created_at
     assert batches[0].imported_by == "Nico"
     assert batches[0].row_count == 42
 
 
-def test_import_cleaned_dataframe_ersetzt_daten_des_gewaehlten_semesters() -> None:
+def test_import_cleaned_dataframe_speichert_neuen_datenbestand() -> None:
     fake_conn = _FakeConnection(insert_id=42)
     conn = cast(Any, fake_conn)
 
@@ -206,23 +243,54 @@ def test_import_cleaned_dataframe_ersetzt_daten_des_gewaehlten_semesters() -> No
         conn,
         pd.DataFrame([_row()]),
         filename="Export_110526.csv",
-        semester="WS2026_27",
+        report_date=date(2026, 8, 15),
         imported_by="Nico",
     )
 
     assert batch_id == 42
-    assert any(
-        "DELETE FROM import_batches" in query
-        and params == ("WS2026_27", date(2026, 1, 16), date(2026, 6, 30))
-        for query, params in fake_conn.executed
-    )
+    assert not any("DELETE FROM import_batches" in query for query, _ in fake_conn.executed)
     assert any(
         "INSERT INTO import_batches" in query
         and params[0] == "Export_110526.csv"
         and params[1] is None
-        and params[2] == "WS2026_27"
+        and params[2] is None
+        and params[3] == date(2026, 8, 15)
         for query, params in fake_conn.executed
     )
+
+
+def test_import_cleaned_dataframe_lehnt_vorhandenes_berichtsdatum_ohne_bestaetigung_ab() -> None:
+    created_at = datetime(2026, 8, 15, 10, 30, tzinfo=UTC)
+    existing = (7, "alt.xlsx", date(2026, 8, 15), created_at, "Nico", 42)
+    conn = cast(Any, _FakeConnection(existing_dataset=existing))
+
+    with pytest.raises(DatasetAlreadyExistsError):
+        import_cleaned_dataframe(
+            conn,
+            pd.DataFrame([_row()]),
+            filename="neu.xlsx",
+            report_date=date(2026, 8, 15),
+            imported_by="Nico",
+        )
+
+
+def test_import_cleaned_dataframe_ersetzt_vorhandenes_berichtsdatum_mit_bestaetigung() -> None:
+    created_at = datetime(2026, 8, 15, 10, 30, tzinfo=UTC)
+    existing = (7, "alt.xlsx", date(2026, 8, 15), created_at, "Nico", 42)
+    fake_conn = _FakeConnection(existing_dataset=existing, insert_id=43)
+    conn = cast(Any, fake_conn)
+
+    batch_id = import_cleaned_dataframe(
+        conn,
+        pd.DataFrame([_row()]),
+        filename="neu.xlsx",
+        report_date=date(2026, 8, 15),
+        imported_by="Nico",
+        replace_existing=True,
+    )
+
+    assert batch_id == 43
+    assert ("DELETE FROM import_batches WHERE id = %s", (7,)) in fake_conn.executed
 
 
 def test_delete_import_batch_loescht_per_id() -> None:
@@ -248,7 +316,24 @@ def test_get_dashboard_filter_options_mappt_db_rows() -> None:
     conn = cast(
         Any,
         _FakeConnection(
-            existing_semesters=["SS2026", "WS2026_27"],
+            rows=[
+                (
+                    7,
+                    "Export_150826.xlsx",
+                    date(2026, 8, 15),
+                    datetime(2026, 8, 15, tzinfo=UTC),
+                    "Nico",
+                    42,
+                ),
+                (
+                    8,
+                    "Export_310726.xlsx",
+                    date(2026, 7, 31),
+                    datetime(2026, 7, 31, tzinfo=UTC),
+                    "Nico",
+                    40,
+                ),
+            ],
             distinct_values={
                 "fachbereich": ["Gesundheit", "Technik"],
                 "studiengang": ["Informatik", "Maschinenbau"],
@@ -259,7 +344,10 @@ def test_get_dashboard_filter_options_mappt_db_rows() -> None:
 
     options = get_dashboard_filter_options(conn)
 
-    assert options.semesters == ["WS2026_27", "SS2026"]
+    assert [dataset.report_date for dataset in options.datasets] == [
+        date(2026, 8, 15),
+        date(2026, 7, 31),
+    ]
     assert options.fachbereiche == ["Gesundheit", "Technik"]
     assert options.studiengaenge == ["Informatik", "Maschinenbau"]
     assert options.statuses == ["Absage", "Akzeptiert"]
@@ -268,13 +356,13 @@ def test_get_dashboard_filter_options_mappt_db_rows() -> None:
 def test_load_dashboard_rows_mappt_aggregierte_db_rows() -> None:
     fake_conn = _FakeConnection(
         dashboard_rows=[
-            ("WS2026_27", "Technik", "Informatik", "Akzeptiert", 5),
-            ("WS2026_27", "Wirtschaft", "Marketing", "Absage", 3),
+            (7, date(2026, 8, 15), "Technik", "Informatik", "Akzeptiert", 5),
+            (7, date(2026, 8, 15), "Wirtschaft", "Marketing", "Absage", 3),
         ]
     )
     conn = cast(Any, fake_conn)
     filters = DashboardFilters(
-        semesters=("WS2026_27",),
+        batch_ids=(7,),
         fachbereiche=("Technik",),
         studiengaenge=("Informatik",),
         statuses=("Akzeptiert",),
@@ -284,14 +372,16 @@ def test_load_dashboard_rows_mappt_aggregierte_db_rows() -> None:
 
     assert rows.to_dict("records") == [
         {
-            "semester": "WS2026_27",
+            "dataset_id": 7,
+            "report_date": date(2026, 8, 15),
             "fachbereich": "Technik",
             "studiengang": "Informatik",
             "status": "Akzeptiert",
             "anzahl": 5,
         },
         {
-            "semester": "WS2026_27",
+            "dataset_id": 7,
+            "report_date": date(2026, 8, 15),
             "fachbereich": "Wirtschaft",
             "studiengang": "Marketing",
             "status": "Absage",
@@ -302,10 +392,10 @@ def test_load_dashboard_rows_mappt_aggregierte_db_rows() -> None:
         query for query, _ in fake_conn.executed if "COUNT(*) AS anzahl" in query
     ]
     assert executed_dashboard_query
-    assert "b.semester IN (%s)" in executed_dashboard_query[0]
+    assert "b.id IN (%s)" in executed_dashboard_query[0]
     assert "a.fachbereich IN (%s)" in executed_dashboard_query[0]
     assert fake_conn.executed[-1][1] == (
-        "WS2026_27",
+        7,
         "Technik",
         "Informatik",
         "Akzeptiert",

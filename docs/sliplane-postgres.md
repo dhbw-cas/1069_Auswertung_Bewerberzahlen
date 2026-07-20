@@ -74,10 +74,10 @@ Der Dashboard-only-Service bekommt kein `IMPORT_DELETE_PASSWORD`.
 
 Die App erstellt automatisch:
 
-- `import_batches`: ein Datensatz pro gespeicherten Import.
+- `import_batches`: ein Datensatz pro gespeicherten Datenbestand.
 - `applications`: bereinigte Bewerbungszeilen pro Import.
 
-Beim Speichern wird ein Semester ausgewählt. Die App löscht vorhandene Daten desselben Semesters und schreibt anschließend den neuen vollständigen Datenstand. Daten anderer Semester bleiben erhalten.
+Beim Speichern wird ein Berichtsdatum ausgewählt. Pro Berichtsdatum existiert höchstens ein Datenbestand. Vorhandene Daten zu diesem Berichtsdatum werden nur nach expliziter Bestätigung ersetzt; andere Datenbestände bleiben erhalten.
 
 ## Lokale Entwicklung
 

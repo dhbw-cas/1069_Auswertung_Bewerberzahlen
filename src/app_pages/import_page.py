@@ -19,10 +19,11 @@ from bewerberzahlen import (
 from bewerberzahlen.app_config import get_database_url
 from bewerberzahlen.constants import PROGRAM_COLUMN, STATUS_COLUMN
 from bewerberzahlen.storage import (
-    SemesterOption,
-    build_semester_options,
+    DatasetAlreadyExistsError,
+    build_report_date_options,
     compute_content_hash,
     connection_from_url,
+    format_report_date,
     import_cleaned_dataframe,
 )
 
@@ -284,14 +285,17 @@ def _render_cleaned_download_and_import(cleaned: pd.DataFrame, uploaded_name: st
         f"Inhaltsprüfung: `{content_hash[:12]}...`"
     )
 
-    semester_options = build_semester_options()
+    report_date_options = build_report_date_options()
     with st.form("database_import_form"):
         imported_by = st.text_input("Importiert von *")
-        selected_semester = st.selectbox(
-            "Semester *",
-            options=semester_options,
+        selected_report_date = st.selectbox(
+            "Berichtsdatum *",
+            options=report_date_options,
             format_func=lambda option: option.label,
-            help="Beim Speichern werden bestehende Daten dieses Semesters vollständig ersetzt.",
+            help="Der Upload wird als Datenbestand für dieses Berichtsdatum gespeichert.",
+        )
+        replace_existing = st.checkbox(
+            "Bestehenden Datenbestand für dieses Berichtsdatum überschreiben, falls vorhanden."
         )
         note = st.text_area("Notiz", placeholder="Optional")
         save_to_database = st.form_submit_button("In Datenbank speichern", type="primary")
@@ -313,21 +317,24 @@ def _render_cleaned_download_and_import(cleaned: pd.DataFrame, uploaded_name: st
                 conn,
                 import_df,
                 filename=import_filename,
-                semester=selected_semester.key,
+                report_date=selected_report_date.value,
                 imported_by=imported_by,
                 note=note,
+                replace_existing=replace_existing,
             )
+    except DatasetAlreadyExistsError as exc:
+        st.error(
+            f"{exc} Bitte die Überschreibung bestätigen, wenn dieser Datenbestand ersetzt "
+            "werden soll."
+        )
     except ValueError as exc:
         st.error(str(exc))
     except Exception as exc:  # noqa: BLE001
         st.error(f"Speichern fehlgeschlagen: {exc}")
     else:
-        semester_label = (
-            selected_semester.label if isinstance(selected_semester, SemesterOption) else ""
-        )
+        saved_dataset_label = f"Datenbestand vom {format_report_date(selected_report_date.value)}"
         st.success(
-            f"Import für {semester_label} aus {import_source_label} gespeichert "
-            f"(Batch-ID: {batch_id})."
+            f"{saved_dataset_label} aus {import_source_label} gespeichert (Batch-ID: {batch_id})."
         )
 
 
