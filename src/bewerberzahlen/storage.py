@@ -585,7 +585,11 @@ def _parse_date(value: object) -> date | None:
     text = _normalize_value(value)
     if not text:
         return None
-    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d.%m.%y"):
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        pass
+    for fmt in ("%d.%m.%Y", "%d.%m.%y"):
         try:
             return datetime.strptime(text, fmt).date()
         except ValueError:

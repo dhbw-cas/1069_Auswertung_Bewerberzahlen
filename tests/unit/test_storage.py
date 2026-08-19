@@ -259,6 +259,49 @@ def test_import_cleaned_dataframe_speichert_neuen_datenbestand() -> None:
     )
 
 
+def test_import_cleaned_dataframe_akzeptiert_iso_datumswerte_mit_zeitanteil() -> None:
+    fake_conn = _FakeConnection(insert_id=42)
+    conn = cast(Any, fake_conn)
+
+    import_cleaned_dataframe(
+        conn,
+        pd.DataFrame(
+            [
+                _row(
+                    **{
+                        "BEW-Start": "2025-07-29 00:00:00",
+                        ACCEPTED_COLUMN: "2025-07-30T00:00:00",
+                        REJECTION_COLUMN: "2025-07-31 12:34:56",
+                    }
+                )
+            ]
+        ),
+        filename="historisch.xlsx",
+        report_date=date(2025, 7, 31),
+        imported_by="Nico",
+    )
+
+    application_params = next(
+        params for query, params in fake_conn.executed if "INSERT INTO applications" in query
+    )
+    assert application_params[4] == date(2025, 7, 29)
+    assert application_params[8] == date(2025, 7, 30)
+    assert application_params[9] == date(2025, 7, 31)
+
+
+def test_import_cleaned_dataframe_lehnt_ungueltiges_datum_ab() -> None:
+    conn = cast(Any, _FakeConnection())
+
+    with pytest.raises(ValueError, match="Datum konnte nicht gelesen werden"):
+        import_cleaned_dataframe(
+            conn,
+            pd.DataFrame([_row(**{"BEW-Start": "kein Datum"})]),
+            filename="historisch.xlsx",
+            report_date=date(2025, 7, 31),
+            imported_by="Nico",
+        )
+
+
 def test_import_cleaned_dataframe_lehnt_vorhandenes_berichtsdatum_ohne_bestaetigung_ab() -> None:
     created_at = datetime(2026, 8, 15, 10, 30, tzinfo=UTC)
     existing = (7, "alt.xlsx", date(2026, 8, 15), created_at, "Nico", 42)
