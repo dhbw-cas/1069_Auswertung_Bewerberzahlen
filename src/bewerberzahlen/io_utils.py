@@ -19,9 +19,16 @@ CLEANED_IMPORT_REQUIRED_COLUMNS = (STATUS_COLUMN, FACHBEREICH_COLUMN, PROGRAM_CO
 
 IMPORT_COLUMN_RENAMES = {
     "Formular_Start_Datum": "BEW-Start",
+    "Start": "BEW-Start",
+    "Start_Datum": "BEW-Start",
     "Formular_Akzeptiert_Datum": ACCEPTED_COLUMN,
+    "Akzeptiert_Datum": ACCEPTED_COLUMN,
     "Formularfelder_Abgesagt_am": REJECTION_COLUMN,
+    "Abgesagt_am": REJECTION_COLUMN,
     "Formularfelder_Kein_Potential": NO_POTENTIAL_COLUMN,
+    "Kein Potential": NO_POTENTIAL_COLUMN,
+    "Kein_Potential": NO_POTENTIAL_COLUMN,
+    "FB": FACHBEREICH_COLUMN,
 }
 
 
@@ -36,7 +43,7 @@ def read_import_csv_from_bytes(content: bytes) -> pd.DataFrame:
                 dtype=str,
                 keep_default_na=False,
             )
-            return _normalize_import_columns(df)
+            return normalize_import_dataframe(df)
         except UnicodeDecodeError as exc:
             last_error = exc
 
@@ -56,11 +63,18 @@ def read_cleaned_dataframe_from_bytes(content: bytes, filename: str) -> pd.DataF
     return df
 
 
-def _normalize_import_columns(df: pd.DataFrame) -> pd.DataFrame:
-    normalized = df.rename(columns=IMPORT_COLUMN_RENAMES).copy()
+def normalize_import_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize raw import headers shared by current and historical exports."""
+    normalized = df.copy()
+    normalized.columns = [str(column).strip() for column in normalized.columns]
+    normalized = normalized.rename(columns=IMPORT_COLUMN_RENAMES)
+    duplicate_columns = normalized.columns[normalized.columns.duplicated()].tolist()
+    if duplicate_columns:
+        duplicate_labels = ", ".join(sorted({str(column) for column in duplicate_columns}))
+        raise ValueError(f"Spalten sind nach der Normalisierung doppelt: {duplicate_labels}")
     if FACHBEREICH_COLUMN not in normalized.columns:
         normalized[FACHBEREICH_COLUMN] = ""
-    return normalized
+    return normalized.fillna("")
 
 
 def _normalize_cleaned_columns(df: pd.DataFrame) -> pd.DataFrame:

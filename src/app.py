@@ -8,6 +8,11 @@ page = st.navigation(
     [
         st.Page("app_pages/import_page.py", title="Import", icon=":material/upload_file:"),
         st.Page(
+            "app_pages/historical_import_page.py",
+            title="Altbestände",
+            icon=":material/history:",
+        ),
+        st.Page(
             "app_pages/data_management_page.py",
             title="Datenstandverwaltung",
             icon=":material/database:",

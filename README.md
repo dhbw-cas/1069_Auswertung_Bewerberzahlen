@@ -6,29 +6,34 @@ Streamlit-Anwendung zur Bereinigung und historischen Auswertung von Bewerberzahl
 
 - Phase 1: CSV-Upload, Bereinigung, Dublettenentscheidung, Statusableitung, Fachbereich-Zuordnung und Excel-Download.
 - Phase 2: Bereinigte Daten können in PostgreSQL gespeichert werden.
+- Historische XLSX-Datenbasen können über ihre Reiter `Daten dd.mm.yyyy` stapelweise importiert werden.
 - Produktivbetrieb über Sliplane mit getrenntem Admin- und Dashboard-Zugang.
 
 ## Architekturüberblick
 
 Die Anwendung besteht aus einer gemeinsamen Codebasis mit zwei Streamlit-Einstiegspunkten:
 
-- `src/app.py`: Admin-App mit den Seiten `Import`, `Datenstandverwaltung` und `Dashboard`.
+- `src/app.py`: Admin-App mit den Seiten `Import`, `Altbestände`, `Datenstandverwaltung` und `Dashboard`.
 - `src/dashboard_app.py`: Dashboard-only-App für die Hochschulleitung.
 
 Die Seiten liegen unter `src/app_pages/`:
 
 - `import_page.py`: CSV-Upload, Bereinigung, Download und Speichern in PostgreSQL.
+- `historical_import_page.py`: XLSX-Upload historischer Datenreiter, Aufbereitung und stapelweiser Import.
 - `data_management_page.py`: Import-Historie und passwortgeschütztes Löschen gespeicherter Importe.
 - `dashboard_page.py`: Berichte, Filter, Kennzahlen und Diagramme über Datenbestände.
 
 Die fachliche Logik liegt in `src/bewerberzahlen/`:
 
 - `pipeline.py`: Bereinigung, Dublettenlogik, Statusableitung und Fachbereich-Zuordnung.
+- `historical_import.py`: Erkennung, Datumsableitung und Normalisierung historischer XLSX-Datenreiter.
 - `storage.py`: PostgreSQL-Schema, Import-Speicherung, Import-Historie, Löschen und Dashboard-Abfragen.
 - `mapping.py`: Studiengang-zu-Fachbereich-Auflösung.
 - `app_config.py`: Zugriff auf Umgebungsvariablen und Streamlit-Secrets.
 
 PostgreSQL speichert nur bereinigte Daten ohne personenbezogene Felder. Beim Speichern wird ein Berichtsdatum ausgewählt; pro Berichtsdatum existiert höchstens ein Datenbestand. Ein vorhandener Datenbestand wird nur nach expliziter Bestätigung ersetzt.
+
+Beim Altbestandsimport wird jeder erkannte Stichtag einzeln gespeichert. Bereits vorhandene Datenbestände mit demselben Stichtag werden dabei automatisch ersetzt; ein Fehler bei einem Reiter verhindert nicht das Speichern anderer Reiter.
 
 ## Lokal starten
 
