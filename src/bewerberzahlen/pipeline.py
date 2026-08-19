@@ -66,7 +66,8 @@ def process_dataframe(
             warnings.append(
                 Issue(
                     message=(
-                        "Dubletten gefunden (gleiche E-Mail + Studiengang). "
+                        "Dubletten gefunden (gleiche E-Mail oder bei fehlender E-Mail "
+                        "gleicher vollständiger Name, jeweils im selben Studiengang). "
                         "Bitte pro Gruppe genau einen Eintrag zum Behalten auswählen."
                     ),
                     level="warning",
@@ -136,28 +137,67 @@ def _missing_columns(columns: Iterable[str]) -> set[str]:
 
 
 def _normalize_columns(df: pd.DataFrame) -> None:
-    df[EMAIL_COLUMN] = df[EMAIL_COLUMN].astype(str).str.strip().str.lower()
-    df[PROGRAM_COLUMN] = df[PROGRAM_COLUMN].astype(str).str.strip()
+    df[EMAIL_COLUMN] = df[EMAIL_COLUMN].fillna("").astype(str).str.strip().str.lower()
+    df[PROGRAM_COLUMN] = df[PROGRAM_COLUMN].fillna("").astype(str).str.strip()
     df[STATUS_COLUMN] = df[STATUS_COLUMN].fillna("").astype(str)
     # Stelle sicher, dass Fachbereich beschreibbar ist (kein float64-Spaltentyp aus Excel)
     df[FACHBEREICH_COLUMN] = df[FACHBEREICH_COLUMN].astype("string")
 
 
-def _build_duplicate_groups(df: pd.DataFrame) -> dict[tuple[str, str], list[int]]:
-    grouped: dict[tuple[str, str], list[int]] = {}
-    for _, group in df.groupby([PROGRAM_COLUMN, EMAIL_COLUMN], sort=False, dropna=False):
-        if len(group) <= 1:
+def _build_duplicate_groups(df: pd.DataFrame) -> dict[int, list[int]]:
+    row_numbers = _row_numbers(df)
+    parents = {row_number: row_number for row_number in row_numbers}
+
+    def find(row_number: int) -> int:
+        while parents[row_number] != row_number:
+            parents[row_number] = parents[parents[row_number]]
+            row_number = parents[row_number]
+        return row_number
+
+    def connect(rows: list[int]) -> None:
+        if len(rows) <= 1:
+            return
+        first_root = find(rows[0])
+        for row_number in rows[1:]:
+            root = find(row_number)
+            if root != first_root:
+                parents[root] = first_root
+
+    email_groups: dict[tuple[str, str], list[int]] = {}
+    name_groups: dict[tuple[str, str, str], list[tuple[int, bool]]] = {}
+    for _, row in df.iterrows():
+        row_number = int(row["__row_number"])
+        program = str(row[PROGRAM_COLUMN]).strip()
+        if not program:
             continue
-        program = str(group[PROGRAM_COLUMN].iloc[0])
-        email = str(group[EMAIL_COLUMN].iloc[0])
-        row_numbers = sorted(_row_numbers(group))
-        grouped[(program, email)] = row_numbers
-    return grouped
+
+        email = str(row[EMAIL_COLUMN]).strip()
+        if email:
+            email_groups.setdefault((program, email), []).append(row_number)
+
+        first_name = _normalize_name(row["Formularfelder_Vorname"])
+        last_name = _normalize_name(row["Formularfelder_Name"])
+        if first_name and last_name:
+            name_groups.setdefault((program, first_name, last_name), []).append(
+                (row_number, not email)
+            )
+
+    for rows in email_groups.values():
+        connect(rows)
+    for members in name_groups.values():
+        if any(email_missing for _, email_missing in members):
+            connect([row_number for row_number, _ in members])
+
+    components: dict[int, list[int]] = {}
+    for row_number in row_numbers:
+        components.setdefault(find(row_number), []).append(row_number)
+    duplicate_groups = [sorted(rows) for rows in components.values() if len(rows) > 1]
+    return {rows[0]: rows for rows in sorted(duplicate_groups, key=lambda rows: rows[0])}
 
 
 def _resolve_duplicates_by_selection(
     df: pd.DataFrame,
-    duplicate_groups: dict[tuple[str, str], list[int]],
+    duplicate_groups: dict[int, list[int]],
     selected_rows: set[int] | None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[list[int]]]:
     selected = selected_rows or set()
@@ -185,7 +225,7 @@ def _resolve_duplicates_by_selection(
     return duplicates, deduped, []
 
 
-def _count_duplicate_excess(duplicate_groups: dict[tuple[str, str], list[int]]) -> int:
+def _count_duplicate_excess(duplicate_groups: dict[int, list[int]]) -> int:
     return sum(max(len(rows) - 1, 0) for rows in duplicate_groups.values())
 
 
@@ -208,6 +248,12 @@ def _has_value(value: object) -> bool:
     if isinstance(value, str) and not value.strip():
         return False
     return True
+
+
+def _normalize_name(value: object) -> str:
+    if not _has_value(value):
+        return ""
+    return " ".join(str(value).split()).casefold()
 
 
 def _apply_status_rules(df: pd.DataFrame) -> None:

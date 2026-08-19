@@ -59,8 +59,8 @@ def _df(rows: list[dict[str, object]]) -> pd.DataFrame:
 def test_dubletten_erfordern_auswahl() -> None:
     data = _df(
         [
-            _base_row(Bewerbungsnummer=1, EMAIL_COLUMN="a@example.com"),
-            _base_row(Bewerbungsnummer=2, EMAIL_COLUMN="a@example.com"),
+            _base_row(Bewerbungsnummer=1, **{EMAIL_COLUMN: "a@example.com"}),
+            _base_row(Bewerbungsnummer=2, **{EMAIL_COLUMN: "a@example.com"}),
         ]
     )
     result = process_dataframe(data, _resolver())
@@ -81,8 +81,8 @@ def test_dubletten_erfordern_auswahl() -> None:
 def test_dubletten_auswahl_behaelt_gewaehlte_zeile() -> None:
     data = _df(
         [
-            _base_row(Bewerbungsnummer=1, EMAIL_COLUMN="a@example.com"),
-            _base_row(Bewerbungsnummer=2, EMAIL_COLUMN="a@example.com"),
+            _base_row(Bewerbungsnummer=1, **{EMAIL_COLUMN: "a@example.com"}),
+            _base_row(Bewerbungsnummer=2, **{EMAIL_COLUMN: "a@example.com"}),
         ]
     )
     cfg = PipelineConfig(duplicate_keep_rows={3})
@@ -101,13 +101,14 @@ def test_gleiche_email_unterschiedlicher_studiengang_ist_keine_dublette() -> Non
         [
             _base_row(
                 Bewerbungsnummer=1,
-                EMAIL_COLUMN="a@example.com",
-                **{PROGRAM_COLUMN: "Informatik"},
+                **{EMAIL_COLUMN: "a@example.com", PROGRAM_COLUMN: "Informatik"},
             ),
             _base_row(
                 Bewerbungsnummer=2,
-                EMAIL_COLUMN="a@example.com",
-                **{PROGRAM_COLUMN: "Marketing and Business Psychology"},
+                **{
+                    EMAIL_COLUMN: "a@example.com",
+                    PROGRAM_COLUMN: "Marketing and Business Psychology",
+                },
             ),
         ]
     )
@@ -122,9 +123,9 @@ def test_gleiche_email_unterschiedlicher_studiengang_ist_keine_dublette() -> Non
 def test_dreifach_dublette_behaelt_nur_ausgewaehlte_zeile() -> None:
     data = _df(
         [
-            _base_row(Bewerbungsnummer=1, EMAIL_COLUMN="a@example.com"),
-            _base_row(Bewerbungsnummer=2, EMAIL_COLUMN="a@example.com"),
-            _base_row(Bewerbungsnummer=3, EMAIL_COLUMN="a@example.com"),
+            _base_row(Bewerbungsnummer=1, **{EMAIL_COLUMN: "a@example.com"}),
+            _base_row(Bewerbungsnummer=2, **{EMAIL_COLUMN: "a@example.com"}),
+            _base_row(Bewerbungsnummer=3, **{EMAIL_COLUMN: "a@example.com"}),
         ]
     )
     cfg = PipelineConfig(duplicate_keep_rows={3})
@@ -134,6 +135,144 @@ def test_dreifach_dublette_behaelt_nur_ausgewaehlte_zeile() -> None:
     assert len(result.cleaned) == 1
     assert result.cleaned["Bewerbungsnummer"].iloc[0] == 2
     assert len(result.duplicates) == 2
+    assert result.n_duplicates == 2
+
+
+def test_leere_emails_unterschiedlicher_namen_sind_keine_dubletten() -> None:
+    data = _df(
+        [
+            _base_row(
+                Bewerbungsnummer=1,
+                Formularfelder_Vorname="Max",
+                Formularfelder_Name="Mustermann",
+                **{EMAIL_COLUMN: ""},
+            ),
+            _base_row(
+                Bewerbungsnummer=2,
+                Formularfelder_Vorname="Erika",
+                Formularfelder_Name="Musterfrau",
+                **{EMAIL_COLUMN: ""},
+            ),
+        ]
+    )
+
+    result = process_dataframe(data, _resolver())
+
+    assert result.cleaned is not None
+    assert len(result.cleaned) == 2
+    assert not result.duplicate_groups
+
+
+def test_leere_emails_gleichen_vollstaendigen_namen_normalisiert() -> None:
+    data = _df(
+        [
+            _base_row(
+                Bewerbungsnummer=1,
+                Formularfelder_Vorname="  Max   Maria ",
+                Formularfelder_Name="Müller",
+                **{EMAIL_COLUMN: None},
+            ),
+            _base_row(
+                Bewerbungsnummer=2,
+                Formularfelder_Vorname="max maria",
+                Formularfelder_Name="MÜLLER",
+                **{EMAIL_COLUMN: pd.NA},
+            ),
+        ]
+    )
+
+    result = process_dataframe(data, _resolver())
+
+    assert result.cleaned is None
+    assert result.duplicate_groups == [[2, 3]]
+
+
+def test_name_wird_genutzt_wenn_nur_eine_email_leer_ist() -> None:
+    data = _df(
+        [
+            _base_row(Bewerbungsnummer=1, **{EMAIL_COLUMN: "max@example.com"}),
+            _base_row(Bewerbungsnummer=2, **{EMAIL_COLUMN: ""}),
+        ]
+    )
+
+    result = process_dataframe(data, _resolver())
+
+    assert result.cleaned is None
+    assert result.duplicate_groups == [[2, 3]]
+
+
+def test_gleicher_name_mit_unterschiedlichen_ausgefuellten_emails_ist_keine_dublette() -> None:
+    data = _df(
+        [
+            _base_row(Bewerbungsnummer=1, **{EMAIL_COLUMN: "max1@example.com"}),
+            _base_row(Bewerbungsnummer=2, **{EMAIL_COLUMN: "max2@example.com"}),
+        ]
+    )
+
+    result = process_dataframe(data, _resolver())
+
+    assert result.cleaned is not None
+    assert len(result.cleaned) == 2
+    assert not result.duplicate_groups
+
+
+def test_gleiche_email_bleibt_bei_unterschiedlichen_namen_dublette() -> None:
+    data = _df(
+        [
+            _base_row(
+                Bewerbungsnummer=1,
+                Formularfelder_Vorname="Max",
+                Formularfelder_Name="Mustermann",
+                **{EMAIL_COLUMN: "shared@example.com"},
+            ),
+            _base_row(
+                Bewerbungsnummer=2,
+                Formularfelder_Vorname="Erika",
+                Formularfelder_Name="Musterfrau",
+                **{EMAIL_COLUMN: "shared@example.com"},
+            ),
+        ]
+    )
+
+    result = process_dataframe(data, _resolver())
+
+    assert result.cleaned is None
+    assert result.duplicate_groups == [[2, 3]]
+
+
+def test_leere_email_mit_unvollstaendigem_namen_ist_keine_dublette() -> None:
+    data = _df(
+        [
+            _base_row(Bewerbungsnummer=1, Formularfelder_Name="", **{EMAIL_COLUMN: ""}),
+            _base_row(Bewerbungsnummer=2, Formularfelder_Name="", **{EMAIL_COLUMN: ""}),
+        ]
+    )
+
+    result = process_dataframe(data, _resolver())
+
+    assert result.cleaned is not None
+    assert len(result.cleaned) == 2
+    assert not result.duplicate_groups
+
+
+def test_email_und_namens_treffer_werden_zu_einer_gruppe_verbunden() -> None:
+    data = _df(
+        [
+            _base_row(
+                Bewerbungsnummer=1,
+                Formularfelder_Vorname="Andere",
+                Formularfelder_Name="Person",
+                **{EMAIL_COLUMN: "shared@example.com"},
+            ),
+            _base_row(Bewerbungsnummer=2, **{EMAIL_COLUMN: "shared@example.com"}),
+            _base_row(Bewerbungsnummer=3, **{EMAIL_COLUMN: ""}),
+        ]
+    )
+
+    result = process_dataframe(data, _resolver())
+
+    assert result.cleaned is None
+    assert result.duplicate_groups == [[2, 3, 4]]
     assert result.n_duplicates == 2
 
 
