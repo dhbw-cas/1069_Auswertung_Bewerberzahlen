@@ -6,12 +6,14 @@ from pandas.io.formats.style import Styler
 
 from bewerberzahlen.app_config import get_database_url
 from bewerberzahlen.reports import (
+    ACCEPTED_DELTA_PERCENT_COLUMN,
     BEWERBUNGSZAHLEN_WISE_REPORT_ID,
     OVERVIEW_REPORT_ID,
     PER_DATO_COLUMN,
     REPORT_DEFINITIONS,
     ROW_TYPE_COLUMN,
     build_bewerbungszahlen_wise_report,
+    previous_year_report_date,
 )
 from bewerberzahlen.storage import (
     DashboardFilterOptions,
@@ -19,6 +21,7 @@ from bewerberzahlen.storage import (
     ExistingImport,
     connection_from_url,
     dataset_label,
+    find_dataset_by_report_date,
     get_dashboard_filter_options,
     load_dashboard_rows,
 )
@@ -154,8 +157,8 @@ def _render_bewerbungszahlen_wise_report(
 ) -> None:
     st.subheader("Bewerbungszahlen WiSe")
     st.caption(
-        "Der Bericht bildet den Excel-Bericht nach. Vorjahres-, Prognose- und Zielwertspalten "
-        "sind vorbereitet und werden befüllt, sobald die Referenzdaten importiert werden."
+        "Der Bericht bildet den Excel-Bericht nach. Akzeptiert-Vorjahreswerte werden über den "
+        "exakt gleichen Stichtag im Vorjahr ermittelt."
     )
     st.markdown(f"**{dataset_label(selected_dataset)}**")
 
@@ -174,14 +177,40 @@ def _render_bewerbungszahlen_wise_report(
         fachbereiche=tuple(selected_fachbereiche),
         studiengaenge=tuple(selected_studiengaenge),
     )
+    previous_date = (
+        previous_year_report_date(selected_dataset.report_date)
+        if selected_dataset.report_date is not None
+        else None
+    )
+    previous_dataset: ExistingImport | None = None
+    previous_year_rows: pd.DataFrame | None = None
     try:
         with connection_from_url(database_url) as conn:
             dashboard_rows = load_dashboard_rows(conn, filters)
+            if previous_date is not None:
+                previous_dataset = find_dataset_by_report_date(conn, previous_date)
+            if previous_dataset is not None:
+                previous_year_rows = load_dashboard_rows(
+                    conn,
+                    DashboardFilters(
+                        batch_ids=(previous_dataset.id,),
+                        fachbereiche=tuple(selected_fachbereiche),
+                        studiengaenge=tuple(selected_studiengaenge),
+                    ),
+                )
     except Exception as exc:  # noqa: BLE001
         st.error(f"Berichtsdaten konnten nicht geladen werden: {exc}")
         return
 
-    report_rows = build_bewerbungszahlen_wise_report(dashboard_rows)
+    if previous_date is not None and previous_dataset is None:
+        st.info(
+            f"Für den Vorjahresstichtag {previous_date:%d.%m.%Y} ist kein Datenbestand "
+            "vorhanden. Vorjahres- und Deltafelder bleiben leer."
+        )
+    elif previous_dataset is not None:
+        st.caption(f"Vorjahresvergleich: {dataset_label(previous_dataset)}")
+
+    report_rows = build_bewerbungszahlen_wise_report(dashboard_rows, previous_year_rows)
     if report_rows.empty:
         st.info("Keine Daten für den gewählten Bericht vorhanden.")
         return
@@ -198,6 +227,11 @@ def _render_bewerbungszahlen_wise_report(
 
 
 def _style_bewerbungszahlen_wise_report(report_rows: pd.DataFrame) -> Styler:
+    def format_percentage(value: object) -> str:
+        if not isinstance(value, (int, float)):
+            return str(value)
+        return f"{value:.1f} %".replace(".", ",")
+
     def style_row(row: pd.Series) -> list[str]:
         row_type = str(row.get(ROW_TYPE_COLUMN, ""))
         if row_type == "Gesamtsumme":
@@ -209,7 +243,11 @@ def _style_bewerbungszahlen_wise_report(report_rows: pd.DataFrame) -> Styler:
             for column in row.index
         ]
 
-    return report_rows.style.apply(style_row, axis=1).hide(axis="columns", subset=[ROW_TYPE_COLUMN])
+    return (
+        report_rows.style.format({ACCEPTED_DELTA_PERCENT_COLUMN: format_percentage})
+        .apply(style_row, axis=1)
+        .hide(axis="columns", subset=[ROW_TYPE_COLUMN])
+    )
 
 
 render_dashboard()
