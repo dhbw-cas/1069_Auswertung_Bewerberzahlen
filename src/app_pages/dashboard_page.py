@@ -7,6 +7,7 @@ from pandas.io.formats.style import Styler
 from bewerberzahlen.app_config import get_database_url
 from bewerberzahlen.reports import (
     ACCEPTED_DELTA_PERCENT_COLUMN,
+    APPLICATIONS_DELTA_PERCENT_COLUMN,
     BEWERBUNGSZAHLEN_WISE_REPORT_ID,
     OVERVIEW_REPORT_ID,
     PER_DATO_COLUMN,
@@ -149,7 +150,7 @@ def _render_overview_dashboard(
             "anzahl": "Anzahl",
         }
     ).drop(columns=["dataset_id", "report_date"])
-    st.dataframe(detail_rows, hide_index=True, use_container_width=True)
+    st.dataframe(detail_rows, hide_index=True, width="stretch")
 
 
 def _render_bewerbungszahlen_wise_report(
@@ -157,8 +158,9 @@ def _render_bewerbungszahlen_wise_report(
 ) -> None:
     st.subheader("Bewerbungszahlen WiSe")
     st.caption(
-        "Der Bericht bildet den Excel-Bericht nach. Akzeptiert-Vorjahreswerte werden über den "
-        "exakt gleichen Stichtag im Vorjahr ermittelt."
+        "Der Bericht bildet den Excel-Bericht nach. Vorjahreswerte werden über den "
+        "exakt gleichen Stichtag im Vorjahr ermittelt. Alle Bewerbungen entsprechen "
+        "„per dato“: akzeptiert + offen, ohne „Kein Potential“ und „Absagen“."
     )
     st.markdown(f"**{dataset_label(selected_dataset)}**")
 
@@ -205,7 +207,7 @@ def _render_bewerbungszahlen_wise_report(
     if previous_date is not None and previous_dataset is None:
         st.info(
             f"Für den Vorjahresstichtag {previous_date:%d.%m.%Y} ist kein Datenbestand "
-            "vorhanden. Vorjahres- und Deltafelder bleiben leer."
+            "vorhanden. Vorjahres- und Deltafelder werden als „-“ angezeigt."
         )
     elif previous_dataset is not None:
         st.caption(f"Vorjahresvergleich: {dataset_label(previous_dataset)}")
@@ -221,7 +223,7 @@ def _render_bewerbungszahlen_wise_report(
     st.dataframe(
         _style_bewerbungszahlen_wise_report(report_rows),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         height=720,
     )
 
@@ -244,7 +246,12 @@ def _style_bewerbungszahlen_wise_report(report_rows: pd.DataFrame) -> Styler:
         ]
 
     return (
-        report_rows.style.format({ACCEPTED_DELTA_PERCENT_COLUMN: format_percentage})
+        report_rows.style.format(
+            {
+                ACCEPTED_DELTA_PERCENT_COLUMN: format_percentage,
+                APPLICATIONS_DELTA_PERCENT_COLUMN: format_percentage,
+            }
+        )
         .apply(style_row, axis=1)
         .hide(axis="columns", subset=[ROW_TYPE_COLUMN])
     )

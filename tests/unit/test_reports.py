@@ -3,12 +3,16 @@ from __future__ import annotations
 from datetime import date
 
 import pandas as pd
+import pytest
 
 from bewerberzahlen.reports import (
     ACCEPTED_COLUMN,
     ACCEPTED_DELTA_COLUMN,
     ACCEPTED_DELTA_PERCENT_COLUMN,
     ACCEPTED_PREVIOUS_YEAR_COLUMN,
+    APPLICATIONS_DELTA_COLUMN,
+    APPLICATIONS_DELTA_PERCENT_COLUMN,
+    APPLICATIONS_PREVIOUS_YEAR_COLUMN,
     NO_POTENTIAL_COLUMN,
     OPEN_COLUMN,
     PER_DATO_COLUMN,
@@ -67,11 +71,10 @@ def test_bewerbungszahlen_wise_report_enthaelt_placeholder_spalten() -> None:
     dashboard_rows = pd.DataFrame([_row("Technik", "Informatik", "Akzeptiert", 1)])
 
     report = build_bewerbungszahlen_wise_report(dashboard_rows)
-    row = report[report[PROGRAM_COLUMN] == "Informatik"].iloc[0]
 
     for column in PLACEHOLDER_COLUMNS:
         assert column in report.columns
-        assert row[column] == PLACEHOLDER_VALUE
+        assert report[column].eq(PLACEHOLDER_VALUE).all()
 
 
 def test_bewerbungszahlen_wise_report_behandelt_unbekannte_status_als_offen() -> None:
@@ -127,6 +130,110 @@ def test_bewerbungszahlen_wise_report_behandelt_leere_vorjahresauswahl_als_null(
     assert row[ACCEPTED_PREVIOUS_YEAR_COLUMN] == 0
     assert row[ACCEPTED_DELTA_COLUMN] == 3
     assert row[ACCEPTED_DELTA_PERCENT_COLUMN] == PLACEHOLDER_VALUE
+    assert row[APPLICATIONS_PREVIOUS_YEAR_COLUMN] == 0
+    assert row[APPLICATIONS_DELTA_COLUMN] == 3
+    assert row[APPLICATIONS_DELTA_PERCENT_COLUMN] == PLACEHOLDER_VALUE
+
+
+def test_bewerbungszahlen_vorjahresvergleich_zaehlt_nur_akzeptiert_und_offen() -> None:
+    current_rows = pd.DataFrame(
+        [
+            _row("Technik", "Informatik", "Akzeptiert", 6),
+            _row("Technik", "Informatik", "Offen", 3),
+            _row("Technik", "Informatik", "Abgeschickt", 3),
+            _row("Technik", "Informatik", "Kein Potential", 5),
+            _row("Technik", "Informatik", "Absage", 7),
+        ]
+    )
+    previous_rows = pd.DataFrame(
+        [
+            _row("Technik", "Informatik", "Akzeptiert", 2),
+            _row("Technik", "Informatik", "Offen", 2),
+            _row("Technik", "Informatik", "Kein Potential", 11),
+            _row("Technik", "Informatik", "Absage", 13),
+        ]
+    )
+
+    report = build_bewerbungszahlen_wise_report(current_rows, previous_rows)
+    row = report[report[PROGRAM_COLUMN] == "Informatik"].iloc[0]
+
+    assert row[PER_DATO_COLUMN] == 12
+    assert row[APPLICATIONS_PREVIOUS_YEAR_COLUMN] == 4
+    assert row[APPLICATIONS_DELTA_COLUMN] == 8
+    assert row[APPLICATIONS_DELTA_PERCENT_COLUMN] == 200.0
+    assert row[ACCEPTED_PREVIOUS_YEAR_COLUMN] == 2
+    assert row[ACCEPTED_DELTA_COLUMN] == 4
+    assert row[ACCEPTED_DELTA_PERCENT_COLUMN] == 200.0
+
+
+@pytest.mark.parametrize(
+    ("current", "previous", "delta", "percent"),
+    [
+        (6, 4, 2, 50.0),
+        (2, 4, -2, -50.0),
+        (4, 4, 0, 0.0),
+        (0, 4, -4, -100.0),
+        (3, 0, 3, PLACEHOLDER_VALUE),
+        (0, 0, 0, PLACEHOLDER_VALUE),
+    ],
+)
+def test_bewerbungszahlen_vorjahresvergleich_delta_und_nullwerte(
+    current: int, previous: int, delta: int, percent: float | str
+) -> None:
+    current_rows = pd.DataFrame([_row("Technik", "Informatik", "Offen", current)])
+    previous_rows = pd.DataFrame([_row("Technik", "Informatik", "Offen", previous)])
+
+    report = build_bewerbungszahlen_wise_report(current_rows, previous_rows)
+
+    assert report[APPLICATIONS_PREVIOUS_YEAR_COLUMN].eq(previous).all()
+    assert report[APPLICATIONS_DELTA_COLUMN].eq(delta).all()
+    assert report[APPLICATIONS_DELTA_PERCENT_COLUMN].eq(percent).all()
+
+
+def test_bewerbungszahlen_vorjahresvergleich_berechnet_prozent_aus_summen() -> None:
+    current_rows = pd.DataFrame(
+        [
+            _row("Technik", "Informatik", "Offen", 12),
+            _row("Technik", "Maschinenbau", "Offen", 6),
+            _row("Wirtschaft", "Finance", "Offen", 2),
+        ]
+    )
+    previous_rows = pd.DataFrame(
+        [
+            _row("Technik", "Informatik", "Offen", 4),
+            _row("Technik", "Maschinenbau", "Offen", 8),
+            _row("Wirtschaft", "Finance", "Offen", 8),
+            _row("Technik", "Ehemaliger Studiengang", "Offen", 20),
+        ]
+    )
+
+    report = build_bewerbungszahlen_wise_report(current_rows, previous_rows)
+    technik = report[report[PROGRAM_COLUMN] == "Fachbereich Technik"].iloc[0]
+    total = report[report[PROGRAM_COLUMN] == "Gesamtsumme"].iloc[0]
+
+    assert technik[APPLICATIONS_PREVIOUS_YEAR_COLUMN] == 12
+    assert technik[APPLICATIONS_DELTA_COLUMN] == 6
+    assert technik[APPLICATIONS_DELTA_PERCENT_COLUMN] == 50.0
+    assert total[APPLICATIONS_PREVIOUS_YEAR_COLUMN] == 20
+    assert total[APPLICATIONS_DELTA_COLUMN] == 0
+    assert total[APPLICATIONS_DELTA_PERCENT_COLUMN] == 0.0
+    assert "Ehemaliger Studiengang" not in report[PROGRAM_COLUMN].tolist()
+
+
+def test_bewerbungszahlen_vorjahresvergleich_fehlender_studiengang_zaehlt_als_null() -> None:
+    current_rows = pd.DataFrame([_row("Technik", "Informatik", "Offen", 3)])
+    previous_rows = pd.DataFrame(
+        [
+            _row("Wirtschaft", "Informatik", "Offen", 9),
+            _row("Technik", "Maschinenbau", "Offen", 7),
+        ]
+    )
+
+    report = build_bewerbungszahlen_wise_report(current_rows, previous_rows)
+
+    assert report[APPLICATIONS_PREVIOUS_YEAR_COLUMN].eq(0).all()
+    assert report[APPLICATIONS_DELTA_COLUMN].eq(3).all()
+    assert report[APPLICATIONS_DELTA_PERCENT_COLUMN].eq(PLACEHOLDER_VALUE).all()
 
 
 def test_previous_year_report_date_behandelt_normalen_stichtag_und_schaltjahr() -> None:
