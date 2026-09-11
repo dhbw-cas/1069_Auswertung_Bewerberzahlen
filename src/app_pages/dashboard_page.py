@@ -6,7 +6,9 @@ from pandas.io.formats.style import Styler
 
 from bewerberzahlen.app_config import get_database_url
 from bewerberzahlen.reports import (
+    ACCEPTED_DELTA_COLUMN,
     ACCEPTED_DELTA_PERCENT_COLUMN,
+    APPLICATIONS_DELTA_COLUMN,
     APPLICATIONS_DELTA_PERCENT_COLUMN,
     BEWERBUNGSZAHLEN_WISE_REPORT_ID,
     OVERVIEW_REPORT_ID,
@@ -229,26 +231,55 @@ def _render_bewerbungszahlen_wise_report(
 
 
 def _style_bewerbungszahlen_wise_report(report_rows: pd.DataFrame) -> Styler:
+    delta_columns = (
+        ACCEPTED_DELTA_COLUMN,
+        ACCEPTED_DELTA_PERCENT_COLUMN,
+        APPLICATIONS_DELTA_COLUMN,
+        APPLICATIONS_DELTA_PERCENT_COLUMN,
+    )
+
+    def format_delta(value: object) -> str:
+        if not isinstance(value, (int, float)):
+            return str(value)
+        return f"{value:+.0f}" if value != 0 else "0"
+
     def format_percentage(value: object) -> str:
         if not isinstance(value, (int, float)):
             return str(value)
-        return f"{value:.1f} %".replace(".", ",")
+        return f"{value:+.1f} %".replace(".", ",") if value != 0 else "0,0 %"
 
     def style_row(row: pd.Series) -> list[str]:
         row_type = str(row.get(ROW_TYPE_COLUMN, ""))
+        is_summary = row_type in ("Gesamtsumme", "Fachbereich")
         if row_type == "Gesamtsumme":
-            return ["background-color: #bfbfbf; font-weight: 700;"] * len(row)
-        if row_type == "Fachbereich":
-            return ["background-color: #d9d9d9; font-weight: 700;"] * len(row)
-        return [
-            "background-color: #d9d9d9;" if column == PER_DATO_COLUMN else ""
-            for column in row.index
-        ]
+            styles = ["background-color: #bfbfbf; font-weight: 700;"] * len(row)
+        elif row_type == "Fachbereich":
+            styles = ["background-color: #d9d9d9; font-weight: 700;"] * len(row)
+        else:
+            styles = [
+                "background-color: #d9d9d9;" if column == PER_DATO_COLUMN else ""
+                for column in row.index
+            ]
+
+        for index, (column, value) in enumerate(row.items()):
+            if column not in delta_columns or not isinstance(value, (int, float)):
+                continue
+            if value > 0:
+                styles[index] += "color: #166534;"
+                if not is_summary:
+                    styles[index] += "background-color: #dcfce7;"
+            elif value < 0:
+                styles[index] += "color: #991b1b;"
+                if not is_summary:
+                    styles[index] += "background-color: #fee2e2;"
+        return styles
 
     return (
         report_rows.style.format(
             {
+                ACCEPTED_DELTA_COLUMN: format_delta,
                 ACCEPTED_DELTA_PERCENT_COLUMN: format_percentage,
+                APPLICATIONS_DELTA_COLUMN: format_delta,
                 APPLICATIONS_DELTA_PERCENT_COLUMN: format_percentage,
             }
         )
