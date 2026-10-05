@@ -66,7 +66,7 @@ _TABLE_CSS = """
     --subtotal: #d9d9d9; --total: #bfbfbf;
     --positive: #166534; --positive-background: #dcfce7;
     --negative: #991b1b; --negative-background: #fee2e2;
-    max-height: 720px; box-sizing: border-box; overflow: auto; isolation: isolate;
+    max-height: 1200px; box-sizing: border-box; overflow: auto; isolation: isolate;
     border: 1px solid var(--boundary); border-radius: 4px;
     color: var(--foreground); background: var(--background);
 }
