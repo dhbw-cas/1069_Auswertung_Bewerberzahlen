@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from datetime import date
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 
 from bewerberzahlen.app_config import get_database_url
+from bewerberzahlen.mapping import ProgramResolver
+from bewerberzahlen.reference_storage import load_final_year_rows
 from bewerberzahlen.report_table import render_bewerbungszahlen_wise_table
 from bewerberzahlen.reports import (
     BEWERBUNGSZAHLEN_WISE_REPORT_ID,
@@ -11,6 +16,7 @@ from bewerberzahlen.reports import (
     PROGRAM_COLUMN,
     REPORT_DEFINITIONS,
     build_bewerbungszahlen_wise_report,
+    forecast_reference_warnings,
     previous_year_report_date,
 )
 from bewerberzahlen.storage import (
@@ -22,6 +28,7 @@ from bewerberzahlen.storage import (
     find_dataset_by_report_date,
     get_dashboard_filter_options,
     load_dashboard_rows,
+    semester_label,
 )
 
 
@@ -161,6 +168,23 @@ def _render_bewerbungszahlen_wise_report(
     )
     st.markdown(f"**{dataset_label(selected_dataset)}**")
 
+    default_year = (selected_dataset.report_date or date.today()).year
+    target_year = int(
+        st.number_input(
+            "Zielsemester: Startjahr des Wintersemesters",
+            min_value=1901,
+            max_value=9998,
+            value=default_year,
+            key=f"wise_target_year_{selected_dataset.id}",
+        )
+    )
+    target_semester = f"WS{target_year}_{(target_year + 1) % 100:02d}"
+    reference_semester = f"WS{target_year - 1}_{target_year % 100:02d}"
+    st.caption(
+        f"Zielsemester: {semester_label(target_semester)}. "
+        f"Finale Referenzzahlen: {semester_label(reference_semester)}."
+    )
+
     filter_col1, filter_col2 = st.columns(2)
     with filter_col1:
         selected_fachbereiche = st.multiselect(
@@ -186,6 +210,7 @@ def _render_bewerbungszahlen_wise_report(
     try:
         with connection_from_url(database_url) as conn:
             dashboard_rows = load_dashboard_rows(conn, filters)
+            final_year_rows = load_final_year_rows(conn, reference_semester)
             if previous_date is not None:
                 previous_dataset = find_dataset_by_report_date(conn, previous_date)
             if previous_dataset is not None:
@@ -209,7 +234,19 @@ def _render_bewerbungszahlen_wise_report(
     elif previous_dataset is not None:
         st.caption(f"Vorjahresvergleich: {dataset_label(previous_dataset)}")
 
-    report_rows = build_bewerbungszahlen_wise_report(dashboard_rows, previous_year_rows)
+    resolver = ProgramResolver.from_file(
+        Path(__file__).resolve().parents[1] / "data/mapping/studiengaenge.json"
+    )
+    try:
+        report_rows = build_bewerbungszahlen_wise_report(
+            dashboard_rows,
+            previous_year_rows,
+            previous_year_final_rows=final_year_rows,
+            program_resolver=resolver,
+        )
+    except ValueError as exc:
+        st.error(f"Prognose konnte nicht berechnet werden: {exc}")
+        return
     if report_rows.empty:
         st.info("Keine Daten für den gewählten Bericht vorhanden.")
         return
@@ -218,6 +255,20 @@ def _render_bewerbungszahlen_wise_report(
         report_rows[PROGRAM_COLUMN] = report_rows[PROGRAM_COLUMN].replace(
             {"Gesamtsumme": "Summe Auswahl"}
         )
+
+    warnings = forecast_reference_warnings(report_rows)
+    if warnings:
+        st.warning(
+            "Referenzbasis prüfen: "
+            + " ".join(warnings)
+            + " Summen verwenden die verfügbaren Finalzahlen und alle ausgewählten "
+            "Bewerbungen. Bei fehlenden Finalzahlen beruhen sie auf einer Teilbasis "
+            "und können verzerrt sein."
+        )
+    st.caption(
+        "Prognose BEW = aktuelle BEW ÷ (BEW am Vorjahresstichtag ÷ finale BEW). "
+        "Prognose IMM = Prognose BEW × (finale IMM ÷ finale BEW)."
+    )
 
     st.html(
         render_bewerbungszahlen_wise_table(report_rows, dark_mode=st.context.theme.type == "dark"),

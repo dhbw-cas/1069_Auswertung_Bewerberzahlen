@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from app_pages.reference_import_page import render_reference_import_page
 from bewerberzahlen import FACHBEREICHE, Issue, PipelineConfig, ProgramResolver, process_dataframe
 from bewerberzahlen.app_config import get_database_url
 from bewerberzahlen.constants import PROGRAM_COLUMN, STATUS_COLUMN
@@ -77,6 +78,14 @@ def _render_issues(dataset: HistoricalDataset, issues: list[Issue], title: str) 
 
 def render_historical_import_page() -> None:
     st.title("Altbestände importieren")
+    import_kind = st.selectbox(
+        "Importart",
+        ["Bewerbungsdatenstände", "Semesterreferenzen (BEW / IMM)"],
+        key="historical_import_kind",
+    )
+    if import_kind == "Semesterreferenzen (BEW / IMM)":
+        render_reference_import_page()
+        return
     st.markdown(
         "Liest alle Reiter nach dem Muster „Daten dd.mm.yyyy“, bereitet sie mit der regulären "
         "Importlogik auf und speichert jeden Stichtag als eigenen Datenbestand."

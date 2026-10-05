@@ -44,6 +44,16 @@ class ProgramResolver:
     def _normalize(value: str) -> str:
         return value.strip()
 
+    def canonical_name(self, program_name: str) -> str:
+        """Resolve known aliases for reference joins; preserve unknown names."""
+        normalized = self._normalize(program_name)
+        entry = self._by_name.get(normalized)
+        return entry.name if entry else normalized
+
+    def program_names(self) -> list[str]:
+        """Return unique canonical names for explicit reference import assignments."""
+        return sorted({entry.name for entry in self._by_name.values()})
+
     def resolve(
         self, program_name: str, manual_assignments: dict[str, str] | None = None
     ) -> tuple[str | None, bool]:

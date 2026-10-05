@@ -169,6 +169,19 @@ def test_table_handles_empty_report_with_valid_headers() -> None:
     assert root.findall("./div/table/tbody/tr") == []
 
 
+def test_table_formats_forecast_ratios_and_rounds_only_display_values() -> None:
+    report = _report()
+    report["Zielerreichung per dato/final"] = 0.4
+    report["Wandlung IMM/BEW"] = 0.7555
+    report["Prognose BEW"] = 12.6
+    original = report.copy(deep=True)
+    cells = _parse(report).findall("./div/table/tbody/tr")[0].findall("td")
+    assert cells[REPORT_COLUMNS.index("Prognose BEW") - 1].text == "13"
+    assert cells[REPORT_COLUMNS.index("Zielerreichung per dato/final") - 1].text == "40,0 %"
+    assert cells[REPORT_COLUMNS.index("Wandlung IMM/BEW") - 1].text == "75,5 %"
+    assert_frame_equal(report, original)
+
+
 def test_table_rejects_missing_report_columns_with_clear_error() -> None:
     report = _report().drop(columns=[PROGRAM_COLUMN, "Zielwert"])
     with pytest.raises(ValueError, match="Studiengang / Bereich, Zielwert"):
@@ -207,6 +220,10 @@ def test_dashboard_renders_grouped_report_and_preserves_filtered_total(
         "bewerberzahlen.storage.find_dataset_by_report_date", lambda _conn, _date: previous_dataset
     )
     monkeypatch.setattr("bewerberzahlen.storage.load_dashboard_rows", load_rows)
+    monkeypatch.setattr(
+        "bewerberzahlen.reference_storage.load_final_year_rows",
+        lambda _conn, _semester: pd.DataFrame(),
+    )
     page_path = Path(__file__).resolve().parents[2] / "src/app_pages/dashboard_page.py"
     app = AppTest.from_file(str(page_path), default_timeout=15).run()
     assert not app.exception

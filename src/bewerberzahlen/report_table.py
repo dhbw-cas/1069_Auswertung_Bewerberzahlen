@@ -15,6 +15,8 @@ from bewerberzahlen.reports import (
     APPLICATIONS_DELTA_COLUMN,
     APPLICATIONS_DELTA_PERCENT_COLUMN,
     APPLICATIONS_PREVIOUS_YEAR_COLUMN,
+    COMPLETION_COLUMN,
+    CONVERSION_COLUMN,
     NO_POTENTIAL_COLUMN,
     OPEN_COLUMN,
     PER_DATO_COLUMN,
@@ -180,6 +182,8 @@ def _format_value(column: str, value: object) -> str:
         return str(value)
     if column in _DELTA_PERCENT_COLUMNS:
         return f"{value:+.1f} %".replace(".", ",") if value != 0 else "0,0 %"
+    if column in (COMPLETION_COLUMN, CONVERSION_COLUMN):
+        return f"{value * 100:.1f} %".replace(".", ",")
     if column in _DELTA_COLUMNS:
         return f"{value:+.0f}" if value != 0 else "0"
     return f"{value:.0f}"
