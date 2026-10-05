@@ -2,19 +2,14 @@ from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
-from pandas.io.formats.style import Styler
 
 from bewerberzahlen.app_config import get_database_url
+from bewerberzahlen.report_table import render_bewerbungszahlen_wise_table
 from bewerberzahlen.reports import (
-    ACCEPTED_DELTA_COLUMN,
-    ACCEPTED_DELTA_PERCENT_COLUMN,
-    APPLICATIONS_DELTA_COLUMN,
-    APPLICATIONS_DELTA_PERCENT_COLUMN,
     BEWERBUNGSZAHLEN_WISE_REPORT_ID,
     OVERVIEW_REPORT_ID,
-    PER_DATO_COLUMN,
+    PROGRAM_COLUMN,
     REPORT_DEFINITIONS,
-    ROW_TYPE_COLUMN,
     build_bewerbungszahlen_wise_report,
     previous_year_report_date,
 )
@@ -220,71 +215,14 @@ def _render_bewerbungszahlen_wise_report(
         return
 
     if selected_fachbereiche or selected_studiengaenge:
-        report_rows = report_rows.replace({"Gesamtsumme": "Summe Auswahl"})
-
-    st.dataframe(
-        _style_bewerbungszahlen_wise_report(report_rows),
-        hide_index=True,
-        width="stretch",
-        height=720,
-    )
-
-
-def _style_bewerbungszahlen_wise_report(report_rows: pd.DataFrame) -> Styler:
-    delta_columns = (
-        ACCEPTED_DELTA_COLUMN,
-        ACCEPTED_DELTA_PERCENT_COLUMN,
-        APPLICATIONS_DELTA_COLUMN,
-        APPLICATIONS_DELTA_PERCENT_COLUMN,
-    )
-
-    def format_delta(value: object) -> str:
-        if not isinstance(value, (int, float)):
-            return str(value)
-        return f"{value:+.0f}" if value != 0 else "0"
-
-    def format_percentage(value: object) -> str:
-        if not isinstance(value, (int, float)):
-            return str(value)
-        return f"{value:+.1f} %".replace(".", ",") if value != 0 else "0,0 %"
-
-    def style_row(row: pd.Series) -> list[str]:
-        row_type = str(row.get(ROW_TYPE_COLUMN, ""))
-        is_summary = row_type in ("Gesamtsumme", "Fachbereich")
-        if row_type == "Gesamtsumme":
-            styles = ["background-color: #bfbfbf; font-weight: 700;"] * len(row)
-        elif row_type == "Fachbereich":
-            styles = ["background-color: #d9d9d9; font-weight: 700;"] * len(row)
-        else:
-            styles = [
-                "background-color: #d9d9d9;" if column == PER_DATO_COLUMN else ""
-                for column in row.index
-            ]
-
-        for index, (column, value) in enumerate(row.items()):
-            if column not in delta_columns or not isinstance(value, (int, float)):
-                continue
-            if value > 0:
-                styles[index] += "color: #166534;"
-                if not is_summary:
-                    styles[index] += "background-color: #dcfce7;"
-            elif value < 0:
-                styles[index] += "color: #991b1b;"
-                if not is_summary:
-                    styles[index] += "background-color: #fee2e2;"
-        return styles
-
-    return (
-        report_rows.style.format(
-            {
-                ACCEPTED_DELTA_COLUMN: format_delta,
-                ACCEPTED_DELTA_PERCENT_COLUMN: format_percentage,
-                APPLICATIONS_DELTA_COLUMN: format_delta,
-                APPLICATIONS_DELTA_PERCENT_COLUMN: format_percentage,
-            }
+        report_rows[PROGRAM_COLUMN] = report_rows[PROGRAM_COLUMN].replace(
+            {"Gesamtsumme": "Summe Auswahl"}
         )
-        .apply(style_row, axis=1)
-        .hide(axis="columns", subset=[ROW_TYPE_COLUMN])
+
+    st.html(
+        render_bewerbungszahlen_wise_table(report_rows, dark_mode=st.context.theme.type == "dark"),
+        width="stretch",
+        unsafe_allow_javascript=False,
     )
 
 
